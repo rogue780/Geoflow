@@ -1,4 +1,4 @@
-package stdlib
+package stdlib_test
 
 import (
 	"math"
@@ -8,6 +8,7 @@ import (
 	"github.com/rogue780/geoflow/internal/lexer"
 	"github.com/rogue780/geoflow/internal/object"
 	"github.com/rogue780/geoflow/internal/parser"
+	"github.com/rogue780/geoflow/internal/stdlib"
 )
 
 // testEval creates an environment with all builtins and evaluates source code.
@@ -19,7 +20,10 @@ func testEval(input string) object.Object {
 	for name, b := range object.GetBuiltins() {
 		env.Set(name, b, false)
 	}
-	for name, b := range GetMathBuiltins() {
+	for name, b := range stdlib.GetMathBuiltins() {
+		env.Set(name, b, false)
+	}
+	for name, b := range stdlib.GetGeoBuiltins() {
 		env.Set(name, b, false)
 	}
 	return eval.Eval(program, env)
@@ -337,8 +341,6 @@ func TestMatMul(t *testing.T) {
 	if !ok {
 		t.Fatalf("matMul: expected Matrix, got %T (%s)", result, result.Inspect())
 	}
-	// [1*5+2*7, 1*6+2*8] = [19, 22]
-	// [3*5+4*7, 3*6+4*8] = [43, 50]
 	if m.Data[0][0] != 19 || m.Data[0][1] != 22 || m.Data[1][0] != 43 || m.Data[1][1] != 50 {
 		t.Errorf("matMul: expected [[19,22],[43,50]], got %v", m.Data)
 	}
@@ -391,7 +393,6 @@ func TestMatVecMul(t *testing.T) {
 	if !ok {
 		t.Fatalf("matVecMul: expected Vector, got %T (%s)", result, result.Inspect())
 	}
-	// [1*5+2*6, 3*5+4*6] = [17, 39]
 	if v.Elements[0] != 17 || v.Elements[1] != 39 {
 		t.Errorf("matVecMul: expected [17, 39], got %v", v.Elements)
 	}
@@ -419,7 +420,6 @@ func TestComplexCreate(t *testing.T) {
 }
 
 func TestComplexArithmetic(t *testing.T) {
-	// (3+4i) + (1+2i) = (4+6i)
 	result := testEval("complex(3, 4) + complex(1, 2)")
 	c, ok := result.(*object.Complex)
 	if !ok {
@@ -429,7 +429,6 @@ func TestComplexArithmetic(t *testing.T) {
 		t.Errorf("complex add: expected 4+6i, got %g+%gi", c.Real, c.Imag)
 	}
 
-	// (3+4i) * (1+2i) = (3*1-4*2) + (3*2+4*1)i = -5 + 10i
 	result2 := testEval("complex(3, 4) * complex(1, 2)")
 	c2 := result2.(*object.Complex)
 	if c2.Real != -5 || c2.Imag != 10 {
@@ -464,7 +463,6 @@ func TestComplexNegate(t *testing.T) {
 }
 
 func TestComplexScalarArithmetic(t *testing.T) {
-	// (3+4i) + 5 = (8+4i)
 	result := testEval("complex(3, 4) + 5")
 	c, ok := result.(*object.Complex)
 	if !ok {
@@ -509,17 +507,11 @@ func TestArange(t *testing.T) {
 // ── Integration: Pipeline with math ──
 
 func TestMathPipeline(t *testing.T) {
-	// Sum of squares of evens using math functions
 	result := testEval(`
 [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   |> filter(\x -> x % 2 == 0)
   |> map(\x -> x ^ 2)
   |> mean()
 `)
-	// evens: [2,4,6,8,10], squares: [4,16,36,64,100], mean = 220/5 = 44
 	assertFloat(t, "pipeline+mean", result, 44.0)
 }
-
-// Ensure unused import doesn't cause issues
-var _ = parser.New
-var _ = lexer.New

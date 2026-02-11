@@ -482,12 +482,12 @@ func TestStringInterpolation(t *testing.T) {
 func TestWKTLiteral(t *testing.T) {
 	input := `#POINT(0 0)#`
 	evaluated := testEval(input)
-	str, ok := evaluated.(*object.String)
+	pt, ok := evaluated.(*object.Point)
 	if !ok {
-		t.Fatalf("expected String, got %T", evaluated)
+		t.Fatalf("expected Point, got %T (%s)", evaluated, evaluated.Inspect())
 	}
-	if str.Value != "POINT(0 0)" {
-		t.Errorf("expected 'POINT(0 0)', got %q", str.Value)
+	if pt.Coord.X != 0 || pt.Coord.Y != 0 {
+		t.Errorf("expected POINT(0 0), got %s", pt.Inspect())
 	}
 }
 

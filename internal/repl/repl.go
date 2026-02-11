@@ -28,6 +28,9 @@ func Start(in io.Reader, out io.Writer) {
 	for name, builtin := range stdlib.GetMathBuiltins() {
 		env.Set(name, builtin, false)
 	}
+	for name, builtin := range stdlib.GetGeoBuiltins() {
+		env.Set(name, builtin, false)
+	}
 
 	fmt.Fprintf(out, "GeoFlow v0.1.0 - Interactive REPL\n")
 	fmt.Fprintf(out, "Type 'exit' or 'quit' to exit.\n\n")
@@ -95,6 +98,9 @@ func NewDefaultEnvironment() *object.Environment {
 		env.Set(name, builtin, false)
 	}
 	for name, builtin := range stdlib.GetMathBuiltins() {
+		env.Set(name, builtin, false)
+	}
+	for name, builtin := range stdlib.GetGeoBuiltins() {
 		env.Set(name, builtin, false)
 	}
 	return env

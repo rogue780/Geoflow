@@ -8,6 +8,7 @@ import (
 
 	"github.com/rogue780/geoflow/internal/ast"
 	"github.com/rogue780/geoflow/internal/object"
+	"github.com/rogue780/geoflow/internal/stdlib"
 )
 
 // Eval evaluates an AST node in the given environment.
@@ -52,7 +53,11 @@ func Eval(node ast.Node, env *object.Environment) object.Object {
 	case *ast.NilLiteral:
 		return object.NIL
 	case *ast.WKTLiteral:
-		return &object.String{Value: node.Value}
+		geom, err := stdlib.ParseWKT(node.Value)
+		if err != nil {
+			return newError("WKT parse error: %s", err)
+		}
+		return geom
 	case *ast.SymbolicLiteral:
 		return &object.String{Value: node.Value}
 	case *ast.Identifier:
@@ -648,6 +653,26 @@ func evalDotExpression(node *ast.DotExpression, env *object.Environment) object.
 		return evalMatrixMethod(obj, node.Field)
 	case *object.Complex:
 		return evalComplexMethod(obj, node.Field)
+	case *object.Point:
+		return evalPointMethod(obj, node.Field)
+	case *object.LineString:
+		return evalLineStringMethod(obj, node.Field)
+	case *object.Polygon:
+		return evalPolygonMethod(obj, node.Field)
+	case *object.MultiPoint:
+		return evalMultiPointMethod(obj, node.Field)
+	case *object.MultiLineString:
+		return evalMultiLineStringMethod(obj, node.Field)
+	case *object.MultiPolygon:
+		return evalMultiPolygonMethod(obj, node.Field)
+	case *object.GeometryCollection:
+		return evalGeometryCollectionMethod(obj, node.Field)
+	case *object.BBox:
+		return evalBBoxMethod(obj, node.Field)
+	case *object.Feature:
+		return evalFeatureMethod(obj, node.Field)
+	case *object.FeatureCollection:
+		return evalFeatureCollectionMethod(obj, node.Field)
 	}
 
 	return newError("no field '%s' on type %s", node.Field, left.Type())
@@ -1281,6 +1306,280 @@ func evalStringInterpolation(node *ast.StringInterpolation, env *object.Environm
 		sb.WriteString(val.Inspect())
 	}
 	return &object.String{Value: sb.String()}
+}
+
+// ── Geometry method dispatch ──
+
+func evalPointMethod(p *object.Point, method string) object.Object {
+	switch method {
+	case "x", "lon":
+		return &object.Float{Value: p.Coord.X}
+	case "y", "lat":
+		return &object.Float{Value: p.Coord.Y}
+	case "z", "elevation":
+		if p.Coord.HasZ {
+			return &object.Float{Value: p.Coord.Z}
+		}
+		return object.NIL
+	case "hasZ":
+		return object.NativeBoolToBooleanObject(p.Coord.HasZ)
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: p.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: p.GeomType()}
+	default:
+		return newError("no field '%s' on Point", method)
+	}
+}
+
+func evalLineStringMethod(ls *object.LineString, method string) object.Object {
+	switch method {
+	case "numPoints":
+		return &object.Integer{Value: int64(len(ls.Coords))}
+	case "startPoint":
+		if len(ls.Coords) > 0 {
+			return &object.Point{Coord: ls.Coords[0]}
+		}
+		return object.NIL
+	case "endPoint":
+		if len(ls.Coords) > 0 {
+			return &object.Point{Coord: ls.Coords[len(ls.Coords)-1]}
+		}
+		return object.NIL
+	case "isClosed":
+		if len(ls.Coords) >= 2 {
+			return object.NativeBoolToBooleanObject(ls.Coords[0].Equals(ls.Coords[len(ls.Coords)-1]))
+		}
+		return object.FALSE_OBJ
+	case "points":
+		return &object.Builtin{Name: "points", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(ls.Coords))
+			for i, c := range ls.Coords {
+				elems[i] = &object.Point{Coord: c}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: ls.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: ls.GeomType()}
+	case "reverse":
+		return &object.Builtin{Name: "reverse", Fn: func(args ...object.Object) object.Object {
+			coords := make([]object.Coordinate, len(ls.Coords))
+			for i, c := range ls.Coords {
+				coords[len(ls.Coords)-1-i] = c
+			}
+			return &object.LineString{Coords: coords}
+		}}
+	default:
+		return newError("no field '%s' on LineString", method)
+	}
+}
+
+func evalPolygonMethod(p *object.Polygon, method string) object.Object {
+	switch method {
+	case "exteriorRing":
+		return &object.Builtin{Name: "exteriorRing", Fn: func(args ...object.Object) object.Object {
+			return &object.LineString{Coords: p.ExteriorRing}
+		}}
+	case "numInteriorRings":
+		return &object.Integer{Value: int64(len(p.InteriorRings))}
+	case "interiorRing":
+		return &object.Builtin{Name: "interiorRing", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("interiorRing expects 1 argument (index)")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("interiorRing expects an integer index")
+			}
+			i := int(idx.Value)
+			if i < 0 || i >= len(p.InteriorRings) {
+				return newError("interior ring index out of bounds: %d", i)
+			}
+			return &object.LineString{Coords: p.InteriorRings[i]}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: p.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: p.GeomType()}
+	default:
+		return newError("no field '%s' on Polygon", method)
+	}
+}
+
+func evalMultiPointMethod(mp *object.MultiPoint, method string) object.Object {
+	switch method {
+	case "numGeometries":
+		return &object.Integer{Value: int64(len(mp.Points))}
+	case "geometries":
+		return &object.Builtin{Name: "geometries", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(mp.Points))
+			for i, p := range mp.Points {
+				elems[i] = p
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: mp.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: mp.GeomType()}
+	default:
+		return newError("no field '%s' on MultiPoint", method)
+	}
+}
+
+func evalMultiLineStringMethod(ml *object.MultiLineString, method string) object.Object {
+	switch method {
+	case "numGeometries":
+		return &object.Integer{Value: int64(len(ml.Lines))}
+	case "geometries":
+		return &object.Builtin{Name: "geometries", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(ml.Lines))
+			for i, l := range ml.Lines {
+				elems[i] = l
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: ml.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: ml.GeomType()}
+	default:
+		return newError("no field '%s' on MultiLineString", method)
+	}
+}
+
+func evalMultiPolygonMethod(mp *object.MultiPolygon, method string) object.Object {
+	switch method {
+	case "numGeometries":
+		return &object.Integer{Value: int64(len(mp.Polygons))}
+	case "geometries":
+		return &object.Builtin{Name: "geometries", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(mp.Polygons))
+			for i, p := range mp.Polygons {
+				elems[i] = p
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: mp.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: mp.GeomType()}
+	default:
+		return newError("no field '%s' on MultiPolygon", method)
+	}
+}
+
+func evalGeometryCollectionMethod(gc *object.GeometryCollection, method string) object.Object {
+	switch method {
+	case "numGeometries":
+		return &object.Integer{Value: int64(len(gc.Geometries))}
+	case "geometries":
+		return &object.Builtin{Name: "geometries", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(gc.Geometries))
+			for i, g := range gc.Geometries {
+				elems[i] = g
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "toWKT":
+		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: gc.ToWKT()}
+		}}
+	case "geomType":
+		return &object.String{Value: gc.GeomType()}
+	default:
+		return newError("no field '%s' on GeometryCollection", method)
+	}
+}
+
+func evalBBoxMethod(bb *object.BBox, method string) object.Object {
+	switch method {
+	case "minX":
+		return &object.Float{Value: bb.MinX}
+	case "minY":
+		return &object.Float{Value: bb.MinY}
+	case "maxX":
+		return &object.Float{Value: bb.MaxX}
+	case "maxY":
+		return &object.Float{Value: bb.MaxY}
+	case "width":
+		return &object.Float{Value: bb.MaxX - bb.MinX}
+	case "height":
+		return &object.Float{Value: bb.MaxY - bb.MinY}
+	case "center":
+		return &object.Point{Coord: object.Coordinate{X: (bb.MinX + bb.MaxX) / 2, Y: (bb.MinY + bb.MaxY) / 2}}
+	default:
+		return newError("no field '%s' on BBox", method)
+	}
+}
+
+func evalFeatureMethod(f *object.Feature, method string) object.Object {
+	switch method {
+	case "geometry":
+		return f.Geom
+	case "properties":
+		return f.Properties
+	case "id":
+		if f.ID != nil {
+			return f.ID
+		}
+		return object.NIL
+	case "geomType":
+		return &object.String{Value: f.Geom.GeomType()}
+	case "get":
+		return &object.Builtin{Name: "get", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("get expects 1 argument (property name)")
+			}
+			key, ok := args[0].(*object.String)
+			if !ok {
+				return newError("get expects a string key")
+			}
+			val, found := f.Properties.Get(key.Value)
+			if !found {
+				return object.NIL
+			}
+			return val
+		}}
+	default:
+		// Try property lookup
+		val, found := f.Properties.Get(method)
+		if found {
+			return val
+		}
+		return newError("no field '%s' on Feature", method)
+	}
+}
+
+func evalFeatureCollectionMethod(fc *object.FeatureCollection, method string) object.Object {
+	switch method {
+	case "numFeatures", "length":
+		return &object.Integer{Value: int64(len(fc.Features))}
+	case "features":
+		return &object.Builtin{Name: "features", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(fc.Features))
+			for i, f := range fc.Features {
+				elems[i] = f
+			}
+			return &object.List{Elements: elems}
+		}}
+	default:
+		return newError("no field '%s' on FeatureCollection", method)
+	}
 }
 
 // ── Vector/Matrix/Complex methods and operators ──
