@@ -215,6 +215,14 @@ func evalMinusPrefixOperator(right object.Object) object.Object {
 		return &object.Integer{Value: -obj.Value}
 	case *object.Float:
 		return &object.Float{Value: -obj.Value}
+	case *object.Vector:
+		elems := make([]float64, len(obj.Elements))
+		for i, e := range obj.Elements {
+			elems[i] = -e
+		}
+		return &object.Vector{Elements: elems}
+	case *object.Complex:
+		return &object.Complex{Real: -obj.Real, Imag: -obj.Imag}
 	default:
 		return newError("unknown operator: -%s", right.Type())
 	}
@@ -225,11 +233,19 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	case left.Type() == object.INTEGER_OBJ && right.Type() == object.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
 	case left.Type() == object.FLOAT_OBJ || right.Type() == object.FLOAT_OBJ:
+		// Check for Vector * scalar or scalar * Vector
+		if left.Type() == object.VECTOR_OBJ || right.Type() == object.VECTOR_OBJ {
+			return evalVectorInfixExpression(operator, left, right)
+		}
 		return evalFloatInfixExpression(operator, left, right)
 	case left.Type() == object.STRING_OBJ && right.Type() == object.STRING_OBJ:
 		return evalStringInfixExpression(operator, left, right)
 	case left.Type() == object.BOOLEAN_OBJ && right.Type() == object.BOOLEAN_OBJ:
 		return evalBooleanInfixExpression(operator, left, right)
+	case left.Type() == object.VECTOR_OBJ || right.Type() == object.VECTOR_OBJ:
+		return evalVectorInfixExpression(operator, left, right)
+	case left.Type() == object.COMPLEX_OBJ || right.Type() == object.COMPLEX_OBJ:
+		return evalComplexInfixExpression(operator, left, right)
 	case operator == "==":
 		return object.NativeBoolToBooleanObject(left == right)
 	case operator == "!=":
@@ -626,6 +642,12 @@ func evalDotExpression(node *ast.DotExpression, env *object.Environment) object.
 		return evalOptionMethod(obj, node.Field)
 	case *object.Result:
 		return evalResultMethod(obj, node.Field)
+	case *object.Vector:
+		return evalVectorMethod(obj, node.Field)
+	case *object.Matrix:
+		return evalMatrixMethod(obj, node.Field)
+	case *object.Complex:
+		return evalComplexMethod(obj, node.Field)
 	}
 
 	return newError("no field '%s' on type %s", node.Field, left.Type())
@@ -1259,6 +1281,298 @@ func evalStringInterpolation(node *ast.StringInterpolation, env *object.Environm
 		sb.WriteString(val.Inspect())
 	}
 	return &object.String{Value: sb.String()}
+}
+
+// ── Vector/Matrix/Complex methods and operators ──
+
+func evalVectorMethod(v *object.Vector, method string) object.Object {
+	switch method {
+	case "length":
+		return &object.Builtin{Name: "length", Fn: func(args ...object.Object) object.Object {
+			return &object.Integer{Value: int64(len(v.Elements))}
+		}}
+	case "magnitude":
+		return &object.Builtin{Name: "magnitude", Fn: func(args ...object.Object) object.Object {
+			sum := 0.0
+			for _, e := range v.Elements {
+				sum += e * e
+			}
+			return &object.Float{Value: math.Sqrt(sum)}
+		}}
+	case "normalize":
+		return &object.Builtin{Name: "normalize", Fn: func(args ...object.Object) object.Object {
+			mag := 0.0
+			for _, e := range v.Elements {
+				mag += e * e
+			}
+			mag = math.Sqrt(mag)
+			if mag == 0 {
+				return newError("cannot normalize zero vector")
+			}
+			elems := make([]float64, len(v.Elements))
+			for i, e := range v.Elements {
+				elems[i] = e / mag
+			}
+			return &object.Vector{Elements: elems}
+		}}
+	case "toList":
+		return &object.Builtin{Name: "toList", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(v.Elements))
+			for i, e := range v.Elements {
+				elems[i] = &object.Float{Value: e}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "x":
+		if len(v.Elements) >= 1 {
+			return &object.Float{Value: v.Elements[0]}
+		}
+		return newError("vector has no x component")
+	case "y":
+		if len(v.Elements) >= 2 {
+			return &object.Float{Value: v.Elements[1]}
+		}
+		return newError("vector has no y component")
+	case "z":
+		if len(v.Elements) >= 3 {
+			return &object.Float{Value: v.Elements[2]}
+		}
+		return newError("vector has no z component")
+	default:
+		return newError("no method '%s' on Vector", method)
+	}
+}
+
+func evalMatrixMethod(m *object.Matrix, method string) object.Object {
+	switch method {
+	case "rows":
+		return &object.Integer{Value: int64(m.Rows)}
+	case "cols":
+		return &object.Integer{Value: int64(m.Cols)}
+	case "toList":
+		return &object.Builtin{Name: "toList", Fn: func(args ...object.Object) object.Object {
+			rows := make([]object.Object, m.Rows)
+			for i, row := range m.Data {
+				elems := make([]object.Object, len(row))
+				for j, e := range row {
+					elems[j] = &object.Float{Value: e}
+				}
+				rows[i] = &object.List{Elements: elems}
+			}
+			return &object.List{Elements: rows}
+		}}
+	case "get":
+		return &object.Builtin{Name: "get", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("get expects 2 arguments (row, col)")
+			}
+			r, ok1 := args[0].(*object.Integer)
+			c, ok2 := args[1].(*object.Integer)
+			if !ok1 || !ok2 {
+				return newError("get expects integer arguments")
+			}
+			ri, ci := int(r.Value), int(c.Value)
+			if ri < 0 || ri >= m.Rows || ci < 0 || ci >= m.Cols {
+				return newError("matrix index out of bounds: [%d, %d]", ri, ci)
+			}
+			return &object.Float{Value: m.Data[ri][ci]}
+		}}
+	case "row":
+		return &object.Builtin{Name: "row", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("row expects 1 argument")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("row expects an integer argument")
+			}
+			i := int(idx.Value)
+			if i < 0 || i >= m.Rows {
+				return newError("row index out of bounds: %d", i)
+			}
+			return &object.Vector{Elements: append([]float64{}, m.Data[i]...)}
+		}}
+	case "col":
+		return &object.Builtin{Name: "col", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("col expects 1 argument")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("col expects an integer argument")
+			}
+			j := int(idx.Value)
+			if j < 0 || j >= m.Cols {
+				return newError("column index out of bounds: %d", j)
+			}
+			elems := make([]float64, m.Rows)
+			for i := 0; i < m.Rows; i++ {
+				elems[i] = m.Data[i][j]
+			}
+			return &object.Vector{Elements: elems}
+		}}
+	case "isSquare":
+		return object.NativeBoolToBooleanObject(m.Rows == m.Cols)
+	default:
+		return newError("no method '%s' on Matrix", method)
+	}
+}
+
+func evalComplexMethod(c *object.Complex, method string) object.Object {
+	switch method {
+	case "real":
+		return &object.Float{Value: c.Real}
+	case "imag":
+		return &object.Float{Value: c.Imag}
+	case "magnitude":
+		return &object.Builtin{Name: "magnitude", Fn: func(args ...object.Object) object.Object {
+			return &object.Float{Value: math.Sqrt(c.Real*c.Real + c.Imag*c.Imag)}
+		}}
+	case "conjugate":
+		return &object.Builtin{Name: "conjugate", Fn: func(args ...object.Object) object.Object {
+			return &object.Complex{Real: c.Real, Imag: -c.Imag}
+		}}
+	case "phase":
+		return &object.Builtin{Name: "phase", Fn: func(args ...object.Object) object.Object {
+			return &object.Float{Value: math.Atan2(c.Imag, c.Real)}
+		}}
+	default:
+		return newError("no method '%s' on Complex", method)
+	}
+}
+
+func evalVectorInfixExpression(operator string, left, right object.Object) object.Object {
+	// Vector op Vector
+	if lv, ok := left.(*object.Vector); ok {
+		if rv, ok := right.(*object.Vector); ok {
+			if len(lv.Elements) != len(rv.Elements) {
+				return newError("vector length mismatch: %d vs %d", len(lv.Elements), len(rv.Elements))
+			}
+			elems := make([]float64, len(lv.Elements))
+			switch operator {
+			case "+":
+				for i := range elems {
+					elems[i] = lv.Elements[i] + rv.Elements[i]
+				}
+			case "-":
+				for i := range elems {
+					elems[i] = lv.Elements[i] - rv.Elements[i]
+				}
+			case "*":
+				// Element-wise multiplication
+				for i := range elems {
+					elems[i] = lv.Elements[i] * rv.Elements[i]
+				}
+			case "==":
+				for i := range lv.Elements {
+					if lv.Elements[i] != rv.Elements[i] {
+						return object.FALSE_OBJ
+					}
+				}
+				return object.TRUE_OBJ
+			case "!=":
+				for i := range lv.Elements {
+					if lv.Elements[i] != rv.Elements[i] {
+						return object.TRUE_OBJ
+					}
+				}
+				return object.FALSE_OBJ
+			default:
+				return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+			}
+			return &object.Vector{Elements: elems}
+		}
+		// Vector op Scalar
+		if scalar, ok := numericToFloat(right); ok {
+			elems := make([]float64, len(lv.Elements))
+			switch operator {
+			case "*":
+				for i := range elems {
+					elems[i] = lv.Elements[i] * scalar
+				}
+			case "/":
+				if scalar == 0 {
+					return newError("division by zero")
+				}
+				for i := range elems {
+					elems[i] = lv.Elements[i] / scalar
+				}
+			default:
+				return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+			}
+			return &object.Vector{Elements: elems}
+		}
+	}
+	// Scalar op Vector
+	if rv, ok := right.(*object.Vector); ok {
+		if scalar, ok := numericToFloat(left); ok {
+			if operator == "*" {
+				elems := make([]float64, len(rv.Elements))
+				for i := range elems {
+					elems[i] = scalar * rv.Elements[i]
+				}
+				return &object.Vector{Elements: elems}
+			}
+		}
+	}
+	return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+}
+
+func evalComplexInfixExpression(operator string, left, right object.Object) object.Object {
+	lc := toComplex(left)
+	rc := toComplex(right)
+	if lc == nil || rc == nil {
+		return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+	a := complex(lc.Real, lc.Imag)
+	b := complex(rc.Real, rc.Imag)
+	switch operator {
+	case "+":
+		r := a + b
+		return &object.Complex{Real: real(r), Imag: imag(r)}
+	case "-":
+		r := a - b
+		return &object.Complex{Real: real(r), Imag: imag(r)}
+	case "*":
+		r := a * b
+		return &object.Complex{Real: real(r), Imag: imag(r)}
+	case "/":
+		if b == 0 {
+			return newError("division by zero")
+		}
+		r := a / b
+		return &object.Complex{Real: real(r), Imag: imag(r)}
+	case "==":
+		return object.NativeBoolToBooleanObject(a == b)
+	case "!=":
+		return object.NativeBoolToBooleanObject(a != b)
+	default:
+		return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func toComplex(obj object.Object) *object.Complex {
+	switch o := obj.(type) {
+	case *object.Complex:
+		return o
+	case *object.Integer:
+		return &object.Complex{Real: float64(o.Value), Imag: 0}
+	case *object.Float:
+		return &object.Complex{Real: o.Value, Imag: 0}
+	default:
+		return nil
+	}
+}
+
+func numericToFloat(obj object.Object) (float64, bool) {
+	switch o := obj.(type) {
+	case *object.Float:
+		return o.Value, true
+	case *object.Integer:
+		return float64(o.Value), true
+	default:
+		return 0, false
+	}
 }
 
 // Helpers

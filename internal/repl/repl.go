@@ -11,6 +11,7 @@ import (
 	"github.com/rogue780/geoflow/internal/lexer"
 	"github.com/rogue780/geoflow/internal/object"
 	"github.com/rogue780/geoflow/internal/parser"
+	"github.com/rogue780/geoflow/internal/stdlib"
 )
 
 const PROMPT = "geoflow> "
@@ -22,6 +23,9 @@ func Start(in io.Reader, out io.Writer) {
 
 	// Register builtins
 	for name, builtin := range object.GetBuiltins() {
+		env.Set(name, builtin, false)
+	}
+	for name, builtin := range stdlib.GetMathBuiltins() {
 		env.Set(name, builtin, false)
 	}
 
@@ -88,6 +92,9 @@ func Execute(source string, env *object.Environment) object.Object {
 func NewDefaultEnvironment() *object.Environment {
 	env := object.NewEnvironment()
 	for name, builtin := range object.GetBuiltins() {
+		env.Set(name, builtin, false)
+	}
+	for name, builtin := range stdlib.GetMathBuiltins() {
 		env.Set(name, builtin, false)
 	}
 	return env

@@ -29,6 +29,9 @@ const (
 	CONTINUE_OBJ     Type = "Continue"
 	OPTION_OBJ       Type = "Option"
 	RESULT_OBJ       Type = "Result"
+	VECTOR_OBJ       Type = "Vector"
+	MATRIX_OBJ       Type = "Matrix"
+	COMPLEX_OBJ      Type = "Complex"
 )
 
 // Object is the interface all runtime values implement.
@@ -225,6 +228,62 @@ func (r *Result) Inspect() string {
 		return fmt.Sprintf("Ok(%s)", r.Value.Inspect())
 	}
 	return fmt.Sprintf("Err(%s)", r.Value.Inspect())
+}
+
+// Vector represents a mathematical vector of float64 values.
+type Vector struct {
+	Elements []float64
+}
+
+func (v *Vector) Type() Type { return VECTOR_OBJ }
+func (v *Vector) Inspect() string {
+	elems := make([]string, len(v.Elements))
+	for i, e := range v.Elements {
+		if e == math.Trunc(e) && !math.IsInf(e, 0) && !math.IsNaN(e) {
+			elems[i] = fmt.Sprintf("%g.0", e)
+		} else {
+			elems[i] = fmt.Sprintf("%g", e)
+		}
+	}
+	return fmt.Sprintf("vec(%s)", strings.Join(elems, ", "))
+}
+
+// Matrix represents a mathematical matrix of float64 values.
+type Matrix struct {
+	Rows int
+	Cols int
+	Data [][]float64
+}
+
+func (m *Matrix) Type() Type { return MATRIX_OBJ }
+func (m *Matrix) Inspect() string {
+	rows := make([]string, m.Rows)
+	for i, row := range m.Data {
+		elems := make([]string, len(row))
+		for j, e := range row {
+			if e == math.Trunc(e) && !math.IsInf(e, 0) && !math.IsNaN(e) {
+				elems[j] = fmt.Sprintf("%g.0", e)
+			} else {
+				elems[j] = fmt.Sprintf("%g", e)
+			}
+		}
+		rows[i] = fmt.Sprintf("[%s]", strings.Join(elems, ", "))
+	}
+	return fmt.Sprintf("mat(%s)", strings.Join(rows, ", "))
+}
+
+// Complex represents a complex number.
+type Complex struct {
+	Real float64
+	Imag float64
+}
+
+func (c *Complex) Type() Type { return COMPLEX_OBJ }
+func (c *Complex) Inspect() string {
+	if c.Imag >= 0 {
+		return fmt.Sprintf("%g+%gi", c.Real, c.Imag)
+	}
+	return fmt.Sprintf("%g%gi", c.Real, c.Imag)
 }
 
 // Singleton objects.
