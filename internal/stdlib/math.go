@@ -93,12 +93,15 @@ func GetMathBuiltins() map[string]*object.Builtin {
 		"TAU":      {Name: "TAU", Fn: func(args ...object.Object) object.Object { return &object.Float{Value: 2 * math.Pi} }},
 		"INFINITY": {Name: "INFINITY", Fn: func(args ...object.Object) object.Object { return &object.Float{Value: math.Inf(1)} }},
 		"NAN":      {Name: "NAN", Fn: func(args ...object.Object) object.Object { return &object.Float{Value: math.NaN()} }},
+		"PHI":      {Name: "PHI", Fn: func(args ...object.Object) object.Object { return &object.Float{Value: (1 + math.Sqrt(5)) / 2} }},
+		"NEG_INF":  {Name: "NEG_INF", Fn: func(args ...object.Object) object.Object { return &object.Float{Value: math.Inf(-1)} }},
 
 		// ── Rounding ──
 		"floor": unaryFloat("floor", math.Floor),
 		"ceil":  unaryFloat("ceil", math.Ceil),
 		"round": unaryFloat("round", math.Round),
 		"trunc": unaryFloat("trunc", math.Trunc),
+		"frac":  unaryFloat("frac", func(x float64) float64 { return x - math.Floor(x) }),
 
 		// ── Trigonometric ──
 		"sin":  unaryFloat("sin", math.Sin),
@@ -110,7 +113,10 @@ func GetMathBuiltins() map[string]*object.Builtin {
 		"atan2": binaryFloat("atan2", math.Atan2),
 		"sinh": unaryFloat("sinh", math.Sinh),
 		"cosh": unaryFloat("cosh", math.Cosh),
-		"tanh": unaryFloat("tanh", math.Tanh),
+		"tanh":  unaryFloat("tanh", math.Tanh),
+		"asinh": unaryFloat("asinh", math.Asinh),
+		"acosh": unaryFloat("acosh", math.Acosh),
+		"atanh": unaryFloat("atanh", math.Atanh),
 
 		// ── Conversion ──
 		"toRadians": unaryFloat("toRadians", func(deg float64) float64 { return deg * math.Pi / 180.0 }),
@@ -123,8 +129,11 @@ func GetMathBuiltins() map[string]*object.Builtin {
 		"log2":  unaryFloat("log2", math.Log2),
 		"log10": unaryFloat("log10", math.Log10),
 		"pow":   binaryFloat("pow", math.Pow),
-		"cbrt":  unaryFloat("cbrt", math.Cbrt),
-		"hypot": binaryFloat("hypot", math.Hypot),
+		"cbrt":    unaryFloat("cbrt", math.Cbrt),
+		"hypot":   binaryFloat("hypot", math.Hypot),
+		"expm1":   unaryFloat("expm1", math.Expm1),
+		"log1p":   unaryFloat("log1p", math.Log1p),
+		"logBase": binaryFloat("logBase", func(base, x float64) float64 { return math.Log(x) / math.Log(base) }),
 
 		// ── Sign / Comparison ──
 		"sign": {
@@ -231,6 +240,62 @@ func GetMathBuiltins() map[string]*object.Builtin {
 					result *= i
 				}
 				return &object.Integer{Value: result}
+			},
+		},
+
+		// ── Primality ──
+		"isPrime": {
+			Name: "isPrime",
+			Fn: func(args ...object.Object) object.Object {
+				if len(args) != 1 {
+					return errArgs("isPrime", 1, len(args))
+				}
+				n, ok := args[0].(*object.Integer)
+				if !ok {
+					return &object.Error{Message: "isPrime expects an integer argument"}
+				}
+				v := n.Value
+				if v < 2 {
+					return object.FALSE_OBJ
+				}
+				if v == 2 || v == 3 {
+					return object.TRUE_OBJ
+				}
+				if v%2 == 0 || v%3 == 0 {
+					return object.FALSE_OBJ
+				}
+				for i := int64(5); i*i <= v; i += 6 {
+					if v%i == 0 || v%(i+2) == 0 {
+						return object.FALSE_OBJ
+					}
+				}
+				return object.TRUE_OBJ
+			},
+		},
+
+		// ── Interpolation ──
+		"smoothstep": {
+			Name: "smoothstep",
+			Fn: func(args ...object.Object) object.Object {
+				if len(args) != 3 {
+					return errArgs("smoothstep", 3, len(args))
+				}
+				edge0, ok1 := toFloat(args[0])
+				edge1, ok2 := toFloat(args[1])
+				x, ok3 := toFloat(args[2])
+				if !ok1 || !ok2 || !ok3 {
+					return errNumeric("smoothstep")
+				}
+				// Clamp x to [0,1] range
+				t := (x - edge0) / (edge1 - edge0)
+				if t < 0 {
+					t = 0
+				}
+				if t > 1 {
+					t = 1
+				}
+				// Hermite interpolation
+				return &object.Float{Value: t * t * (3 - 2*t)}
 			},
 		},
 	}
@@ -535,6 +600,197 @@ func addStatisticsBuiltins(builtins map[string]*object.Builtin) {
 			}}
 		},
 	}
+
+	builtins["sem"] = &object.Builtin{
+		Name: "sem",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("sem", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) < 2 {
+				return &object.Error{Message: "sem requires at least 2 values"}
+			}
+			mean := computeMean(vals)
+			sumSq := 0.0
+			for _, v := range vals {
+				d := v - mean
+				sumSq += d * d
+			}
+			sd := math.Sqrt(sumSq / float64(len(vals)-1))
+			return &object.Float{Value: sd / math.Sqrt(float64(len(vals)))}
+		},
+	}
+
+	builtins["skewness"] = &object.Builtin{
+		Name: "skewness",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("skewness", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			n := len(vals)
+			if n < 3 {
+				return &object.Error{Message: "skewness requires at least 3 values"}
+			}
+			mean := computeMean(vals)
+			var m2, m3 float64
+			for _, v := range vals {
+				d := v - mean
+				m2 += d * d
+				m3 += d * d * d
+			}
+			nf := float64(n)
+			m2 /= nf
+			m3 /= nf
+			if m2 == 0 {
+				return &object.Float{Value: 0}
+			}
+			return &object.Float{Value: m3 / math.Pow(m2, 1.5)}
+		},
+	}
+
+	builtins["kurtosis"] = &object.Builtin{
+		Name: "kurtosis",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("kurtosis", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			n := len(vals)
+			if n < 4 {
+				return &object.Error{Message: "kurtosis requires at least 4 values"}
+			}
+			mean := computeMean(vals)
+			var m2, m4 float64
+			for _, v := range vals {
+				d := v - mean
+				d2 := d * d
+				m2 += d2
+				m4 += d2 * d2
+			}
+			nf := float64(n)
+			m2 /= nf
+			m4 /= nf
+			if m2 == 0 {
+				return &object.Float{Value: 0}
+			}
+			// Excess kurtosis = kurtosis - 3
+			return &object.Float{Value: m4/(m2*m2) - 3}
+		},
+	}
+
+	builtins["iqr"] = &object.Builtin{
+		Name: "iqr",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("iqr", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				return &object.Error{Message: "iqr of empty list"}
+			}
+			sorted := make([]float64, len(vals))
+			copy(sorted, vals)
+			sort.Float64s(sorted)
+			q25 := percentileOfSorted(sorted, 25)
+			q75 := percentileOfSorted(sorted, 75)
+			return &object.Float{Value: q75 - q25}
+		},
+	}
+
+	builtins["zscore"] = &object.Builtin{
+		Name: "zscore",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("zscore", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) < 2 {
+				return &object.Error{Message: "zscore requires at least 2 values"}
+			}
+			mean := computeMean(vals)
+			sumSq := 0.0
+			for _, v := range vals {
+				d := v - mean
+				sumSq += d * d
+			}
+			sd := math.Sqrt(sumSq / float64(len(vals)-1))
+			if sd == 0 {
+				elems := make([]object.Object, len(vals))
+				for i := range vals {
+					elems[i] = &object.Float{Value: 0}
+				}
+				return &object.List{Elements: elems}
+			}
+			elems := make([]object.Object, len(vals))
+			for i, v := range vals {
+				elems[i] = &object.Float{Value: (v - mean) / sd}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
+
+	builtins["movingMean"] = &object.Builtin{
+		Name: "movingMean",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("movingMean", 2, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			wObj, ok := args[1].(*object.Integer)
+			if !ok || wObj.Value < 1 {
+				return &object.Error{Message: "movingMean: window must be a positive integer"}
+			}
+			window := int(wObj.Value)
+			if window > len(vals) {
+				return &object.Error{Message: "movingMean: window larger than data length"}
+			}
+			resultLen := len(vals) - window + 1
+			elems := make([]object.Object, resultLen)
+			// Compute first window sum
+			sum := 0.0
+			for i := 0; i < window; i++ {
+				sum += vals[i]
+			}
+			elems[0] = &object.Float{Value: sum / float64(window)}
+			for i := 1; i < resultLen; i++ {
+				sum += vals[i+window-1] - vals[i-1]
+				elems[i] = &object.Float{Value: sum / float64(window)}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
+}
+
+// percentileOfSorted computes the p-th percentile of an already-sorted slice.
+func percentileOfSorted(sorted []float64, p float64) float64 {
+	rank := (p / 100) * float64(len(sorted)-1)
+	lower := int(math.Floor(rank))
+	upper := int(math.Ceil(rank))
+	if lower == upper {
+		return sorted[lower]
+	}
+	frac := rank - float64(lower)
+	return sorted[lower]*(1-frac) + sorted[upper]*frac
 }
 
 func computeMean(vals []float64) float64 {

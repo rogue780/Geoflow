@@ -48,6 +48,7 @@ var precedences = map[token.Type]int{
 	token.LPAREN:       CALL,
 	token.DOT:          CALL,
 	token.LBRACKET:     CALL,
+	token.QUESTION:     CALL,
 }
 
 // Parser parses a stream of tokens into an AST.
@@ -453,6 +454,8 @@ func (p *Parser) parsePrefixExpression() ast.Expression {
 		return p.parseForExpression()
 	case token.WHILE:
 		return p.parseWhileExpression()
+	case token.TRY:
+		return p.parseTryCatchExpression()
 	case token.BREAK:
 		return &ast.Identifier{Token: p.curToken, Value: "break"}
 	case token.CONTINUE:
@@ -473,6 +476,12 @@ func (p *Parser) parseInfixExpressionWith(left ast.Expression) ast.Expression {
 	case token.PIPE:
 		p.nextToken()
 		return p.parsePipelineExpression(left)
+	case token.REVERSE_PIPE:
+		p.nextToken()
+		return p.parseReversePipelineExpression(left)
+	case token.QUESTION:
+		p.nextToken()
+		return &ast.ErrorPropagation{Token: p.curToken, Expression: left}
 	case token.LPAREN:
 		p.nextToken()
 		return p.parseCallExpression(left)
@@ -518,6 +527,17 @@ func (p *Parser) parsePipelineExpression(left ast.Expression) ast.Expression {
 	expr := &ast.PipelineExpression{
 		Token: p.curToken,
 		Left:  left,
+	}
+	p.nextToken()
+	expr.Right = p.parseExpression(PIPELINE)
+	return expr
+}
+
+func (p *Parser) parseReversePipelineExpression(left ast.Expression) ast.Expression {
+	expr := &ast.PipelineExpression{
+		Token:   p.curToken,
+		Left:    left,
+		Reverse: true,
 	}
 	p.nextToken()
 	expr.Right = p.parseExpression(PIPELINE)
@@ -912,6 +932,31 @@ func (p *Parser) parseWhileExpression() ast.Expression {
 		return nil
 	}
 	expr.Body = p.parseBlockExpression()
+
+	return expr
+}
+
+func (p *Parser) parseTryCatchExpression() ast.Expression {
+	expr := &ast.TryCatchExpression{Token: p.curToken}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+	expr.TryBody = p.parseBlockExpression()
+
+	if !p.expectPeek(token.CATCH) {
+		return nil
+	}
+
+	if p.peekTokenIs(token.IDENT) {
+		p.nextToken()
+		expr.CatchParam = p.curToken.Literal
+	}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+	expr.CatchBody = p.parseBlockExpression()
 
 	return expr
 }

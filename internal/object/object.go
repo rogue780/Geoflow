@@ -4,7 +4,9 @@ package object
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/rogue780/geoflow/internal/ast"
 )
@@ -13,25 +15,36 @@ import (
 type Type string
 
 const (
-	INTEGER_OBJ      Type = "int"
-	FLOAT_OBJ        Type = "float"
-	BOOLEAN_OBJ      Type = "bool"
-	STRING_OBJ       Type = "string"
-	NIL_OBJ          Type = "nil"
-	LIST_OBJ         Type = "List"
-	MAP_OBJ          Type = "Map"
-	TUPLE_OBJ        Type = "Tuple"
-	FUNCTION_OBJ     Type = "Function"
-	BUILTIN_OBJ      Type = "Builtin"
-	RETURN_VALUE_OBJ Type = "ReturnValue"
-	ERROR_OBJ        Type = "Error"
-	BREAK_OBJ        Type = "Break"
-	CONTINUE_OBJ     Type = "Continue"
-	OPTION_OBJ       Type = "Option"
-	RESULT_OBJ       Type = "Result"
-	VECTOR_OBJ       Type = "Vector"
-	MATRIX_OBJ       Type = "Matrix"
-	COMPLEX_OBJ      Type = "Complex"
+	INTEGER_OBJ           Type = "int"
+	FLOAT_OBJ             Type = "float"
+	BOOLEAN_OBJ           Type = "bool"
+	STRING_OBJ            Type = "string"
+	NIL_OBJ               Type = "nil"
+	LIST_OBJ              Type = "List"
+	MAP_OBJ               Type = "Map"
+	SET_OBJ               Type = "Set"
+	TUPLE_OBJ             Type = "Tuple"
+	FUNCTION_OBJ          Type = "Function"
+	BUILTIN_OBJ           Type = "Builtin"
+	COMPOSED_FUNCTION_OBJ Type = "ComposedFunction"
+	RETURN_VALUE_OBJ      Type = "ReturnValue"
+	ERROR_OBJ             Type = "Error"
+	BREAK_OBJ             Type = "Break"
+	CONTINUE_OBJ          Type = "Continue"
+	OPTION_OBJ            Type = "Option"
+	RESULT_OBJ            Type = "Result"
+	VECTOR_OBJ            Type = "Vector"
+	MATRIX_OBJ            Type = "Matrix"
+	COMPLEX_OBJ           Type = "Complex"
+	MODULE_OBJ            Type = "Module"
+	STRUCT_OBJ            Type = "Struct"
+	STRUCT_DEF_OBJ        Type = "StructDef"
+	ENUM_VARIANT_OBJ      Type = "EnumVariant"
+	ENUM_DEF_OBJ          Type = "EnumDef"
+	CRS_OBJ               Type = "CRS"
+	DATETIME_OBJ          Type = "DateTime"
+	DURATION_OBJ          Type = "Duration"
+	RTREE_OBJ             Type = "RTree"
 )
 
 // Object is the interface all runtime values implement.
@@ -321,7 +334,195 @@ func IsTruthy(obj Object) bool {
 		return len(o.Elements) > 0
 	case *Option:
 		return o.IsSome
+	case *Set:
+		return len(o.Elements) > 0
 	default:
 		return true
 	}
 }
+
+// ── Module System ──
+
+// Module represents an imported module with named exports.
+type Module struct {
+	Name    string
+	Exports map[string]Object
+}
+
+func (m *Module) Type() Type      { return MODULE_OBJ }
+func (m *Module) Inspect() string { return fmt.Sprintf("<module: %s>", m.Name) }
+
+// ── Set Type ──
+
+// Set represents an unordered collection of unique values.
+type Set struct {
+	Elements map[string]Object // keyed by Inspect() for dedup
+}
+
+func (s *Set) Type() Type { return SET_OBJ }
+func (s *Set) Inspect() string {
+	elems := make([]string, 0, len(s.Elements))
+	keys := make([]string, 0, len(s.Elements))
+	for k := range s.Elements {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		elems = append(elems, s.Elements[k].Inspect())
+	}
+	return fmt.Sprintf("Set{%s}", strings.Join(elems, ", "))
+}
+
+// NewSet creates a new empty Set.
+func NewSet() *Set {
+	return &Set{Elements: make(map[string]Object)}
+}
+
+// Add adds an element to the set, returning a new set.
+func (s *Set) Add(obj Object) *Set {
+	ns := NewSet()
+	for k, v := range s.Elements {
+		ns.Elements[k] = v
+	}
+	ns.Elements[obj.Inspect()] = obj
+	return ns
+}
+
+// Contains checks if the set contains an element.
+func (s *Set) Contains(obj Object) bool {
+	_, ok := s.Elements[obj.Inspect()]
+	return ok
+}
+
+// ToList converts a set to a list.
+func (s *Set) ToList() *List {
+	elems := make([]Object, 0, len(s.Elements))
+	keys := make([]string, 0, len(s.Elements))
+	for k := range s.Elements {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		elems = append(elems, s.Elements[k])
+	}
+	return &List{Elements: elems}
+}
+
+// ── Struct Type ──
+
+// StructDef describes a struct type (its constructor).
+type StructDef struct {
+	TypeName   string
+	FieldNames []string
+}
+
+func (sd *StructDef) Type() Type      { return STRUCT_DEF_OBJ }
+func (sd *StructDef) Inspect() string { return fmt.Sprintf("<struct def: %s>", sd.TypeName) }
+
+// Struct represents an instantiated struct value.
+type Struct struct {
+	TypeName string
+	Fields   map[string]Object
+	Order    []string // field order
+}
+
+func (s *Struct) Type() Type { return STRUCT_OBJ }
+func (s *Struct) Inspect() string {
+	fields := make([]string, len(s.Order))
+	for i, name := range s.Order {
+		fields[i] = fmt.Sprintf("%s: %s", name, s.Fields[name].Inspect())
+	}
+	return fmt.Sprintf("%s{%s}", s.TypeName, strings.Join(fields, ", "))
+}
+
+// ── Enum Type ──
+
+// EnumDef describes an enum type.
+type EnumDef struct {
+	TypeName     string
+	VariantNames []string
+	VariantArity map[string]int // number of fields per variant; 0 = unit variant
+}
+
+func (ed *EnumDef) Type() Type      { return ENUM_DEF_OBJ }
+func (ed *EnumDef) Inspect() string { return fmt.Sprintf("<enum def: %s>", ed.TypeName) }
+
+// EnumVariant represents an instantiated enum variant.
+type EnumVariant struct {
+	TypeName    string
+	VariantName string
+	Payload     []Object
+}
+
+func (ev *EnumVariant) Type() Type { return ENUM_VARIANT_OBJ }
+func (ev *EnumVariant) Inspect() string {
+	if len(ev.Payload) == 0 {
+		return ev.VariantName
+	}
+	elems := make([]string, len(ev.Payload))
+	for i, p := range ev.Payload {
+		elems[i] = p.Inspect()
+	}
+	return fmt.Sprintf("%s(%s)", ev.VariantName, strings.Join(elems, ", "))
+}
+
+// ── ComposedFunction ──
+
+// ComposedFunction wraps two callables into a composed function (f . g)(x) = f(g(x)).
+type ComposedFunction struct {
+	Outer Object // f
+	Inner Object // g
+}
+
+func (cf *ComposedFunction) Type() Type      { return COMPOSED_FUNCTION_OBJ }
+func (cf *ComposedFunction) Inspect() string { return "<composed function>" }
+
+// ── CRS Type ──
+
+// CRS represents a Coordinate Reference System.
+type CRS struct {
+	EPSGCode     int
+	CRSName      string
+	IsGeographic bool
+	IsProjected  bool
+	Units        string
+}
+
+func (c *CRS) Type() Type { return CRS_OBJ }
+func (c *CRS) Inspect() string {
+	return fmt.Sprintf("CRS(EPSG:%d, %s)", c.EPSGCode, c.CRSName)
+}
+
+// ── DateTime/Duration Types ──
+
+// DateTime wraps Go's time.Time.
+type DateTime struct {
+	Value time.Time
+}
+
+func (dt *DateTime) Type() Type      { return DATETIME_OBJ }
+func (dt *DateTime) Inspect() string { return dt.Value.Format(time.RFC3339) }
+
+// Duration wraps Go's time.Duration.
+type Duration struct {
+	Value time.Duration
+}
+
+func (d *Duration) Type() Type      { return DURATION_OBJ }
+func (d *Duration) Inspect() string { return d.Value.String() }
+
+// ── RTree Type ──
+
+// RTreeEntry represents a single entry in an RTree spatial index.
+type RTreeEntry struct {
+	MinX, MinY, MaxX, MaxY float64
+	Item                   Object
+}
+
+// RTree represents a spatial index using a flat list of bounding-box entries.
+type RTree struct {
+	Entries []RTreeEntry
+}
+
+func (rt *RTree) Type() Type      { return RTREE_OBJ }
+func (rt *RTree) Inspect() string { return fmt.Sprintf("RTree(%d entries)", len(rt.Entries)) }

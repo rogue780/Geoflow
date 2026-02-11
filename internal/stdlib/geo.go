@@ -1039,6 +1039,35 @@ func projectGeometry(g object.Geometry, proj func(object.Coordinate) object.Coor
 }
 
 // ════════════════════════════════════════════════════════════
+// Exported wrappers for use by eval package
+// ════════════════════════════════════════════════════════════
+
+func EuclideanDistance(c1, c2 object.Coordinate) float64  { return euclideanDistance(c1, c2) }
+func HaversineDistance(c1, c2 object.Coordinate) float64  { return haversineDistance(c1, c2) }
+func ShoelaceArea(ring []object.Coordinate) float64       { return shoelaceArea(ring) }
+func GeodesicArea(ring []object.Coordinate) float64       { return geodesicArea(ring) }
+func LineLength(coords []object.Coordinate) float64       { return lineLength(coords) }
+func LineLengthGeodesic(coords []object.Coordinate) float64 { return lineLengthGeodesic(coords) }
+func CentroidOfRing(ring []object.Coordinate) object.Coordinate { return centroidOfRing(ring) }
+func Envelope(coords []object.Coordinate) *object.BBox    { return envelope(coords) }
+func PointInRing(pt object.Coordinate, ring []object.Coordinate) bool { return pointInRing(pt, ring) }
+func ConvexHull(coords []object.Coordinate) []object.Coordinate { return convexHull(coords) }
+func SimplifyDouglasPeucker(coords []object.Coordinate, tolerance float64) []object.Coordinate {
+	return simplifyDouglasPeucker(coords, tolerance)
+}
+func BufferPoint(center object.Coordinate, radius float64, segments int) []object.Coordinate {
+	return bufferPoint(center, radius, segments)
+}
+func ProjectGeometry(g object.Geometry, proj func(object.Coordinate) object.Coordinate) object.Geometry {
+	return projectGeometry(g, proj)
+}
+func ProjectCoord4326To3857(c object.Coordinate) object.Coordinate { return projectCoord4326To3857(c) }
+func ProjectCoord3857To4326(c object.Coordinate) object.Coordinate { return projectCoord3857To4326(c) }
+func SpatialContains(outer, inner object.Object) bool     { return spatialContains(outer, inner) }
+func SpatialIntersects(a, b object.Object) bool           { return spatialIntersects(a, b) }
+func SegmentsIntersect(a1, a2, b1, b2 object.Coordinate) bool { return segmentsIntersect(a1, a2, b1, b2) }
+
+// ════════════════════════════════════════════════════════════
 // Builtin Registration
 // ════════════════════════════════════════════════════════════
 

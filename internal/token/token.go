@@ -111,6 +111,8 @@ const (
 	AS       Type = "as"
 	TRY      Type = "try"
 	CATCH    Type = "catch"
+	GEOM     Type = "geom"
+	GEOG     Type = "geog"
 )
 
 var keywords = map[string]Type{

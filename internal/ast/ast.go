@@ -275,16 +275,20 @@ func (ie *InfixExpression) String() string {
 	return fmt.Sprintf("(%s %s %s)", ie.Left.String(), ie.Operator, ie.Right.String())
 }
 
-// PipelineExpression represents: expr |> expr
+// PipelineExpression represents: expr |> expr or expr <| expr
 type PipelineExpression struct {
-	Token token.Token
-	Left  Expression
-	Right Expression
+	Token   token.Token
+	Left    Expression
+	Right   Expression
+	Reverse bool
 }
 
 func (pe *PipelineExpression) expressionNode()      {}
 func (pe *PipelineExpression) TokenLiteral() string { return pe.Token.Literal }
 func (pe *PipelineExpression) String() string {
+	if pe.Reverse {
+		return fmt.Sprintf("(%s <| %s)", pe.Left.String(), pe.Right.String())
+	}
 	return fmt.Sprintf("(%s |> %s)", pe.Left.String(), pe.Right.String())
 }
 
@@ -574,6 +578,30 @@ func (ep *ErrorPropagation) expressionNode()      {}
 func (ep *ErrorPropagation) TokenLiteral() string { return ep.Token.Literal }
 func (ep *ErrorPropagation) String() string {
 	return fmt.Sprintf("%s?", ep.Expression.String())
+}
+
+// TryCatchExpression represents: try { body } catch param { body }
+type TryCatchExpression struct {
+	Token      token.Token
+	TryBody    *BlockExpression
+	CatchParam string
+	CatchBody  *BlockExpression
+}
+
+func (tc *TryCatchExpression) statementNode()       {}
+func (tc *TryCatchExpression) expressionNode()      {}
+func (tc *TryCatchExpression) TokenLiteral() string { return tc.Token.Literal }
+func (tc *TryCatchExpression) String() string {
+	var sb strings.Builder
+	sb.WriteString("try ")
+	sb.WriteString(tc.TryBody.String())
+	sb.WriteString(" catch ")
+	if tc.CatchParam != "" {
+		sb.WriteString(tc.CatchParam)
+		sb.WriteString(" ")
+	}
+	sb.WriteString(tc.CatchBody.String())
+	return sb.String()
 }
 
 // ConstructorExpression represents: Type(args) e.g. Some(42), Ok(value), Err("msg")
