@@ -381,6 +381,17 @@ func evalBooleanInfixExpression(operator string, left, right object.Object) obje
 	}
 }
 
+// isComposable reports whether an object can participate in function composition via |>.
+// This is narrower than isCallable — struct/enum constructors are callable but not composable.
+func isComposable(obj object.Object) bool {
+	switch obj.(type) {
+	case *object.Function, *object.Builtin, *object.ComposedFunction:
+		return true
+	default:
+		return false
+	}
+}
+
 func evalPipelineExpression(node *ast.PipelineExpression, env *object.Environment) object.Object {
 	if node.Reverse {
 		// f <| x  means f(x)
@@ -414,17 +425,26 @@ func evalPipelineExpression(node *ast.PipelineExpression, env *object.Environmen
 		if isError(fn) {
 			return fn
 		}
+		if isComposable(left) && isComposable(fn) {
+			return &object.ComposedFunction{Outer: fn, Inner: left}
+		}
 		return applyFunction(fn, []object.Object{left}, env)
 	case *ast.DotExpression:
 		fn := Eval(right, env)
 		if isError(fn) {
 			return fn
 		}
+		if isComposable(left) && isComposable(fn) {
+			return &object.ComposedFunction{Outer: fn, Inner: left}
+		}
 		return applyFunction(fn, []object.Object{left}, env)
 	default:
 		fn := Eval(node.Right, env)
 		if isError(fn) {
 			return fn
+		}
+		if isComposable(left) && isComposable(fn) {
+			return &object.ComposedFunction{Outer: fn, Inner: left}
 		}
 		return applyFunction(fn, []object.Object{left}, env)
 	}
@@ -439,6 +459,9 @@ func evalReversePipeline(node *ast.PipelineExpression, env *object.Environment) 
 	right := Eval(node.Right, env)
 	if isError(right) {
 		return right
+	}
+	if isComposable(fn) && isComposable(right) {
+		return &object.ComposedFunction{Outer: fn, Inner: right}
 	}
 	return applyFunction(fn, []object.Object{right}, env)
 }

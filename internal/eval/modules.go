@@ -81,6 +81,8 @@ var statsNames = map[string]bool{
 	"mean": true, "median": true, "mode": true,
 	"variance": true, "stddev": true, "percentile": true,
 	"correlation": true, "covariance": true, "linreg": true,
+	"sem": true, "skewness": true, "kurtosis": true,
+	"iqr": true, "zscore": true, "movingMean": true,
 }
 
 var linalgNames = map[string]bool{

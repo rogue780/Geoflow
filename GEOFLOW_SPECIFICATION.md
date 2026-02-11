@@ -747,6 +747,34 @@ x |> f(y)        -- equivalent to f(x, y)
 x |> f |> g |> h -- equivalent to h(g(f(x)))
 ```
 
+#### Polymorphic Composition
+
+When **both sides** of `|>` are functions (or callable objects), the pipeline operator
+**composes** them into a new function instead of applying:
+
+```geoflow
+-- Both sides are functions → returns a ComposedFunction
+let transform = (\x -> x + 5) |> (\x -> x * x)
+transform(3)   -- 64: first adds 5 (→8), then squares (→64)
+
+-- Chaining composes naturally (ComposedFunction is itself callable)
+let process = (\x -> x + 1) |> (\x -> x * 2) |> (\x -> x * x)
+process(4)     -- 100: 4→5→10→100
+
+-- Works with named functions
+fn double(x) { x * 2 }
+fn addOne(x) { x + 1 }
+let doubleAndAdd = double |> addOne
+doubleAndAdd(5)  -- 11
+
+-- Reverse pipe composes with swapped order: f <| g → f(g(x))
+let r = (\x -> x * x) <| (\x -> x + 5)
+r(3)   -- 64: same as transform above
+```
+
+A value on the left side is still applied as before — composition only triggers
+when the left side is also a function, builtin, or composed function.
+
 ### 5.3 Composition Operator
 
 ```geoflow
