@@ -292,6 +292,19 @@ func (pe *PipelineExpression) String() string {
 	return fmt.Sprintf("(%s |> %s)", pe.Left.String(), pe.Right.String())
 }
 
+// JuxtapositionExpression represents space-separated function composition: f g h
+type JuxtapositionExpression struct {
+	Token token.Token
+	Left  Expression
+	Right Expression
+}
+
+func (je *JuxtapositionExpression) expressionNode()      {}
+func (je *JuxtapositionExpression) TokenLiteral() string { return je.Token.Literal }
+func (je *JuxtapositionExpression) String() string {
+	return fmt.Sprintf("(%s %s)", je.Left.String(), je.Right.String())
+}
+
 // IfExpression represents: if cond then consequence else alternative
 type IfExpression struct {
 	Token       token.Token

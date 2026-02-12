@@ -422,6 +422,167 @@ func TestWKTLiteral(t *testing.T) {
 	}
 }
 
+func TestJuxtapositionExpression(t *testing.T) {
+	// Simple juxtaposition: f g
+	input := `f g`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("expected ExpressionStatement, got %T", program.Statements[0])
+	}
+
+	jux, ok := stmt.Expression.(*ast.JuxtapositionExpression)
+	if !ok {
+		t.Fatalf("expected JuxtapositionExpression, got %T", stmt.Expression)
+	}
+
+	leftIdent, ok := jux.Left.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("expected Identifier for left, got %T", jux.Left)
+	}
+	if leftIdent.Value != "f" {
+		t.Errorf("expected left='f', got %q", leftIdent.Value)
+	}
+
+	rightIdent, ok := jux.Right.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("expected Identifier for right, got %T", jux.Right)
+	}
+	if rightIdent.Value != "g" {
+		t.Errorf("expected right='g', got %q", rightIdent.Value)
+	}
+}
+
+func TestJuxtapositionLeftAssociative(t *testing.T) {
+	// f g h should parse as (f g) h
+	input := `f g h`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("expected ExpressionStatement, got %T", program.Statements[0])
+	}
+
+	outer, ok := stmt.Expression.(*ast.JuxtapositionExpression)
+	if !ok {
+		t.Fatalf("expected JuxtapositionExpression, got %T", stmt.Expression)
+	}
+
+	// Right should be h
+	rightIdent, ok := outer.Right.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("expected Identifier for outer right, got %T", outer.Right)
+	}
+	if rightIdent.Value != "h" {
+		t.Errorf("expected outer right='h', got %q", rightIdent.Value)
+	}
+
+	// Left should be (f g)
+	inner, ok := outer.Left.(*ast.JuxtapositionExpression)
+	if !ok {
+		t.Fatalf("expected JuxtapositionExpression for outer left, got %T", outer.Left)
+	}
+	leftIdent, ok := inner.Left.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("expected Identifier for inner left, got %T", inner.Left)
+	}
+	if leftIdent.Value != "f" {
+		t.Errorf("expected inner left='f', got %q", leftIdent.Value)
+	}
+}
+
+func TestJuxtapositionWithCallExpression(t *testing.T) {
+	// f g(x) should parse as Jux{f, Call{g, [x]}}
+	input := `f g(x)`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("expected ExpressionStatement, got %T", program.Statements[0])
+	}
+
+	jux, ok := stmt.Expression.(*ast.JuxtapositionExpression)
+	if !ok {
+		t.Fatalf("expected JuxtapositionExpression, got %T", stmt.Expression)
+	}
+
+	_, ok = jux.Right.(*ast.CallExpression)
+	if !ok {
+		t.Fatalf("expected CallExpression for right, got %T", jux.Right)
+	}
+}
+
+func TestJuxtapositionMultilineIsNotJuxtaposition(t *testing.T) {
+	// f\ng should parse as two separate statements, NOT juxtaposition
+	input := "f\ng"
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 2 {
+		t.Fatalf("expected 2 statements (no juxtaposition across lines), got %d", len(program.Statements))
+	}
+}
+
+func TestJuxtapositionWithPipeline(t *testing.T) {
+	// f g |> h should parse as Pipeline{Jux{f, g}, h}
+	input := `f g |> h`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("expected ExpressionStatement, got %T", program.Statements[0])
+	}
+
+	pipe, ok := stmt.Expression.(*ast.PipelineExpression)
+	if !ok {
+		t.Fatalf("expected PipelineExpression, got %T", stmt.Expression)
+	}
+
+	_, ok = pipe.Left.(*ast.JuxtapositionExpression)
+	if !ok {
+		t.Fatalf("expected JuxtapositionExpression for pipeline left, got %T", pipe.Left)
+	}
+
+	rightIdent, ok := pipe.Right.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("expected Identifier for pipeline right, got %T", pipe.Right)
+	}
+	if rightIdent.Value != "h" {
+		t.Errorf("expected pipeline right='h', got %q", rightIdent.Value)
+	}
+}
+
 func checkParserErrors(t *testing.T, p *Parser) {
 	t.Helper()
 	errors := p.Errors()

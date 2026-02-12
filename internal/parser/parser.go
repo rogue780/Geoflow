@@ -16,6 +16,7 @@ const (
 	_ int = iota
 	LOWEST
 	PIPELINE    // |>
+	COMPOSITION // f g (juxtaposition)
 	ASSIGN_PREC // :=
 	OR_PREC     // ||
 	AND_PREC    // &&
@@ -400,14 +401,41 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 		return nil
 	}
 
-	for !p.peekTokenIs(token.EOF) && precedence < p.peekPrecedence() {
-		left = p.parseInfixExpressionWith(left)
-		if left == nil {
-			return nil
+	for {
+		// Standard Pratt infix loop
+		for !p.peekTokenIs(token.EOF) && precedence < p.peekPrecedence() {
+			left = p.parseInfixExpressionWith(left)
+			if left == nil {
+				return nil
+			}
 		}
+
+		// Juxtaposition composition: f g h (same line, left-to-right)
+		// After juxtaposition, loop back to check for infix operators (e.g. |>)
+		if precedence < COMPOSITION &&
+			p.canStartJuxtaposition() &&
+			p.curToken.Pos.Line == p.peekToken.Pos.Line {
+			p.nextToken()
+			right := p.parseExpression(COMPOSITION)
+			if right == nil {
+				return nil
+			}
+			left = &ast.JuxtapositionExpression{Token: p.curToken, Left: left, Right: right}
+			continue
+		}
+
+		break
 	}
 
 	return left
+}
+
+func (p *Parser) canStartJuxtaposition() bool {
+	switch p.peekToken.Type {
+	case token.IDENT, token.BACKSLASH, token.FN:
+		return true
+	}
+	return false
 }
 
 func (p *Parser) parsePrefixExpression() ast.Expression {
@@ -551,7 +579,24 @@ func (p *Parser) parseCallExpression(fn ast.Expression) ast.Expression {
 }
 
 func (p *Parser) parseDotExpression(left ast.Expression) ast.Expression {
+	dotToken := p.curToken
 	p.nextToken() // consume dot
+
+	// If the token after dot is not an identifier, treat as composition operator
+	// e.g. (\x -> x * 3) . (\x -> x + 1)
+	if !p.curTokenIs(token.IDENT) {
+		right := p.parseExpression(CALL)
+		if right == nil {
+			return nil
+		}
+		return &ast.InfixExpression{
+			Token:    dotToken,
+			Left:     left,
+			Operator: ".",
+			Right:    right,
+		}
+	}
+
 	expr := &ast.DotExpression{
 		Token: p.curToken,
 		Left:  left,

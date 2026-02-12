@@ -81,6 +81,8 @@ func Eval(node ast.Node, env *object.Environment) object.Object {
 		return evalInfixExpression(node.Operator, left, right)
 	case *ast.PipelineExpression:
 		return evalPipelineExpression(node, env)
+	case *ast.JuxtapositionExpression:
+		return evalJuxtapositionExpression(node, env)
 	case *ast.IfExpression:
 		return evalIfExpression(node, env)
 	case *ast.BlockExpression:
@@ -237,6 +239,9 @@ func evalMinusPrefixOperator(right object.Object) object.Object {
 
 func evalInfixExpression(operator string, left, right object.Object) object.Object {
 	switch {
+	case operator == "." && isComposable(left) && isComposable(right):
+		// Dot composition: f . g → f(g(x)) (right-to-left, mathematical)
+		return &object.ComposedFunction{Outer: left, Inner: right}
 	case left.Type() == object.INTEGER_OBJ && right.Type() == object.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
 	case left.Type() == object.FLOAT_OBJ || right.Type() == object.FLOAT_OBJ:
@@ -390,6 +395,24 @@ func isComposable(obj object.Object) bool {
 	default:
 		return false
 	}
+}
+
+func evalJuxtapositionExpression(node *ast.JuxtapositionExpression, env *object.Environment) object.Object {
+	left := Eval(node.Left, env)
+	if isError(left) {
+		return left
+	}
+	right := Eval(node.Right, env)
+	if isError(right) {
+		return right
+	}
+
+	// Both composable → compose (left-to-right: Inner=left, Outer=right)
+	if isComposable(left) && isComposable(right) {
+		return &object.ComposedFunction{Outer: right, Inner: left}
+	}
+	// Left is value, right is callable → apply
+	return applyFunction(right, []object.Object{left}, env)
 }
 
 func evalPipelineExpression(node *ast.PipelineExpression, env *object.Environment) object.Object {
@@ -787,6 +810,17 @@ func evalDotExpression(node *ast.DotExpression, env *object.Environment) object.
 		return evalFeatureMethod(obj, node.Field)
 	case *object.FeatureCollection:
 		return evalFeatureCollectionMethod(obj, node.Field)
+	}
+
+	// Dot composition: f . g → ComposedFunction{Outer: f, Inner: g}
+	if isComposable(left) {
+		if val, ok := env.Get(node.Field); ok && isComposable(val) {
+			return &object.ComposedFunction{Outer: left, Inner: val}
+		}
+		builtins := object.GetBuiltins()
+		if builtin, ok := builtins[node.Field]; ok && isComposable(builtin) {
+			return &object.ComposedFunction{Outer: left, Inner: builtin}
+		}
 	}
 
 	return newError("no field '%s' on type %s", node.Field, left.Type())
@@ -1688,6 +1722,304 @@ func evalListMethod(l *object.List, method string, env *object.Environment) obje
 			}
 			return &object.String{Value: strings.Join(parts, sep)}
 		}}
+	case "filterMap":
+		return &object.Builtin{Name: "filterMap", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("filterMap expects 1 argument (function)")
+			}
+			var result []object.Object
+			for _, elem := range l.Elements {
+				val := applyFunction(args[0], []object.Object{elem}, env)
+				if isError(val) {
+					return val
+				}
+				if opt, ok := val.(*object.Option); ok && opt.IsSome {
+					result = append(result, opt.Value)
+				}
+			}
+			return &object.List{Elements: result}
+		}}
+	case "distinctBy":
+		return &object.Builtin{Name: "distinctBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("distinctBy expects 1 argument (key function)")
+			}
+			seen := make(map[string]bool)
+			var result []object.Object
+			for _, elem := range l.Elements {
+				key := applyFunction(args[0], []object.Object{elem}, env)
+				if isError(key) {
+					return key
+				}
+				keyStr := key.Inspect()
+				if !seen[keyStr] {
+					seen[keyStr] = true
+					result = append(result, elem)
+				}
+			}
+			return &object.List{Elements: result}
+		}}
+	case "sortWith":
+		return &object.Builtin{Name: "sortWith", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("sortWith expects 1 argument (comparator function)")
+			}
+			elems := make([]object.Object, len(l.Elements))
+			copy(elems, l.Elements)
+			// Insertion sort using custom comparator
+			for i := 1; i < len(elems); i++ {
+				for j := i; j > 0; j-- {
+					cmpResult := applyFunction(args[0], []object.Object{elems[j], elems[j-1]}, env)
+					if isError(cmpResult) {
+						return cmpResult
+					}
+					cmpInt, ok := cmpResult.(*object.Integer)
+					if !ok {
+						return newError("sortWith: comparator must return an integer")
+					}
+					if cmpInt.Value < 0 {
+						elems[j], elems[j-1] = elems[j-1], elems[j]
+					} else {
+						break
+					}
+				}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "minBy":
+		return &object.Builtin{Name: "minBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("minBy expects 1 argument (key function)")
+			}
+			if len(l.Elements) == 0 {
+				return object.NONE
+			}
+			minElem := l.Elements[0]
+			minKey := applyFunction(args[0], []object.Object{minElem}, env)
+			if isError(minKey) {
+				return minKey
+			}
+			for _, elem := range l.Elements[1:] {
+				key := applyFunction(args[0], []object.Object{elem}, env)
+				if isError(key) {
+					return key
+				}
+				if compareForSort(key, minKey) < 0 {
+					minElem = elem
+					minKey = key
+				}
+			}
+			return &object.Option{Value: minElem, IsSome: true}
+		}}
+	case "maxBy":
+		return &object.Builtin{Name: "maxBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("maxBy expects 1 argument (key function)")
+			}
+			if len(l.Elements) == 0 {
+				return object.NONE
+			}
+			maxElem := l.Elements[0]
+			maxKey := applyFunction(args[0], []object.Object{maxElem}, env)
+			if isError(maxKey) {
+				return maxKey
+			}
+			for _, elem := range l.Elements[1:] {
+				key := applyFunction(args[0], []object.Object{elem}, env)
+				if isError(key) {
+					return key
+				}
+				if compareForSort(key, maxKey) > 0 {
+					maxElem = elem
+					maxKey = key
+				}
+			}
+			return &object.Option{Value: maxElem, IsSome: true}
+		}}
+	case "zipWith":
+		return &object.Builtin{Name: "zipWith", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("zipWith expects 2 arguments (list, function)")
+			}
+			other, ok := args[0].(*object.List)
+			if !ok {
+				return newError("zipWith: first argument must be a list")
+			}
+			minLen := len(l.Elements)
+			if len(other.Elements) < minLen {
+				minLen = len(other.Elements)
+			}
+			result := make([]object.Object, minLen)
+			for i := 0; i < minLen; i++ {
+				val := applyFunction(args[1], []object.Object{l.Elements[i], other.Elements[i]}, env)
+				if isError(val) {
+					return val
+				}
+				result[i] = val
+			}
+			return &object.List{Elements: result}
+		}}
+	case "unzip":
+		return &object.Builtin{Name: "unzip", Fn: func(args ...object.Object) object.Object {
+			var listA, listB []object.Object
+			for _, elem := range l.Elements {
+				tup, ok := elem.(*object.Tuple)
+				if !ok || len(tup.Elements) < 2 {
+					return newError("unzip: all elements must be 2-tuples")
+				}
+				listA = append(listA, tup.Elements[0])
+				listB = append(listB, tup.Elements[1])
+			}
+			return &object.Tuple{Elements: []object.Object{
+				&object.List{Elements: listA},
+				&object.List{Elements: listB},
+			}}
+		}}
+	case "intersperse":
+		return &object.Builtin{Name: "intersperse", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("intersperse expects 1 argument (separator)")
+			}
+			if len(l.Elements) <= 1 {
+				newElems := make([]object.Object, len(l.Elements))
+				copy(newElems, l.Elements)
+				return &object.List{Elements: newElems}
+			}
+			result := make([]object.Object, 0, len(l.Elements)*2-1)
+			for i, elem := range l.Elements {
+				if i > 0 {
+					result = append(result, args[0])
+				}
+				result = append(result, elem)
+			}
+			return &object.List{Elements: result}
+		}}
+	case "interleave":
+		return &object.Builtin{Name: "interleave", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("interleave expects 1 argument (list)")
+			}
+			other, ok := args[0].(*object.List)
+			if !ok {
+				return newError("interleave: argument must be a list")
+			}
+			maxLen := len(l.Elements)
+			if len(other.Elements) > maxLen {
+				maxLen = len(other.Elements)
+			}
+			var result []object.Object
+			for i := 0; i < maxLen; i++ {
+				if i < len(l.Elements) {
+					result = append(result, l.Elements[i])
+				}
+				if i < len(other.Elements) {
+					result = append(result, other.Elements[i])
+				}
+			}
+			return &object.List{Elements: result}
+		}}
+	case "windowed":
+		return &object.Builtin{Name: "windowed", Fn: func(args ...object.Object) object.Object {
+			if len(args) < 1 || len(args) > 2 {
+				return newError("windowed expects 1-2 arguments (size, step?)")
+			}
+			size, ok := args[0].(*object.Integer)
+			if !ok || size.Value <= 0 {
+				return newError("windowed: size must be a positive integer")
+			}
+			step := int64(1)
+			if len(args) == 2 {
+				stepObj, ok := args[1].(*object.Integer)
+				if !ok || stepObj.Value <= 0 {
+					return newError("windowed: step must be a positive integer")
+				}
+				step = stepObj.Value
+			}
+			n := int(size.Value)
+			var result []object.Object
+			for i := 0; i+n <= len(l.Elements); i += int(step) {
+				window := make([]object.Object, n)
+				copy(window, l.Elements[i:i+n])
+				result = append(result, &object.List{Elements: window})
+			}
+			return &object.List{Elements: result}
+		}}
+	case "foldRight":
+		return &object.Builtin{Name: "foldRight", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("foldRight expects 2 arguments (initial, function)")
+			}
+			acc := args[0]
+			for i := len(l.Elements) - 1; i >= 0; i-- {
+				acc = applyFunction(args[1], []object.Object{l.Elements[i], acc}, env)
+				if isError(acc) {
+					return acc
+				}
+			}
+			return acc
+		}}
+	case "scan":
+		return &object.Builtin{Name: "scan", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("scan expects 2 arguments (initial, function)")
+			}
+			acc := args[0]
+			result := make([]object.Object, 0, len(l.Elements)+1)
+			result = append(result, acc)
+			for _, elem := range l.Elements {
+				acc = applyFunction(args[1], []object.Object{acc, elem}, env)
+				if isError(acc) {
+					return acc
+				}
+				result = append(result, acc)
+			}
+			return &object.List{Elements: result}
+		}}
+	case "insert":
+		return &object.Builtin{Name: "insert", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("insert expects 2 arguments (index, item)")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("insert: index must be an integer")
+			}
+			i := int(idx.Value)
+			n := len(l.Elements)
+			if i < 0 {
+				i = n + i
+			}
+			if i < 0 || i > n {
+				return newError("insert: index %d out of range for list of length %d", idx.Value, n)
+			}
+			newElems := make([]object.Object, n+1)
+			copy(newElems[:i], l.Elements[:i])
+			newElems[i] = args[1]
+			copy(newElems[i+1:], l.Elements[i:])
+			return &object.List{Elements: newElems}
+		}}
+	case "remove":
+		return &object.Builtin{Name: "remove", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("remove expects 1 argument (index)")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("remove: index must be an integer")
+			}
+			i := int(idx.Value)
+			n := len(l.Elements)
+			if i < 0 {
+				i = n + i
+			}
+			if i < 0 || i >= n {
+				return newError("remove: index %d out of range for list of length %d", idx.Value, n)
+			}
+			newElems := make([]object.Object, n-1)
+			copy(newElems[:i], l.Elements[:i])
+			copy(newElems[i:], l.Elements[i+1:])
+			return &object.List{Elements: newElems}
+		}}
 	default:
 		return newError("no method '%s' on List", method)
 	}
@@ -1883,6 +2215,121 @@ func evalMapMethod(m *object.Map, method string, env *object.Environment) object
 					}
 				}
 				if !found {
+					nm.Pairs = append(nm.Pairs, p)
+				}
+			}
+			return nm
+		}}
+	case "putAll":
+		return &object.Builtin{Name: "putAll", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("putAll expects 1 argument (map)")
+			}
+			other, ok := args[0].(*object.Map)
+			if !ok {
+				return newError("putAll: argument must be a Map")
+			}
+			nm := &object.Map{}
+			nm.Pairs = append(nm.Pairs, m.Pairs...)
+			for _, p := range other.Pairs {
+				keyStr := ""
+				if s, ok := p.Key.(*object.String); ok {
+					keyStr = s.Value
+				}
+				found := false
+				for i, existing := range nm.Pairs {
+					if s, ok := existing.Key.(*object.String); ok && s.Value == keyStr {
+						nm.Pairs[i] = p
+						found = true
+						break
+					}
+				}
+				if !found {
+					nm.Pairs = append(nm.Pairs, p)
+				}
+			}
+			return nm
+		}}
+	case "update":
+		return &object.Builtin{Name: "update", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("update expects 2 arguments (key, function)")
+			}
+			keyStr := ""
+			if s, ok := args[0].(*object.String); ok {
+				keyStr = s.Value
+			}
+			nm := &object.Map{}
+			for _, p := range m.Pairs {
+				if s, ok := p.Key.(*object.String); ok && s.Value == keyStr {
+					val := applyFunction(args[1], []object.Object{p.Value}, env)
+					if isError(val) {
+						return val
+					}
+					nm.Pairs = append(nm.Pairs, object.MapPair{Key: p.Key, Value: val})
+				} else {
+					nm.Pairs = append(nm.Pairs, p)
+				}
+			}
+			return nm
+		}}
+	case "updateOrInsert":
+		return &object.Builtin{Name: "updateOrInsert", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 3 {
+				return newError("updateOrInsert expects 3 arguments (key, default, function)")
+			}
+			keyStr := ""
+			if s, ok := args[0].(*object.String); ok {
+				keyStr = s.Value
+			}
+			nm := &object.Map{}
+			found := false
+			for _, p := range m.Pairs {
+				if s, ok := p.Key.(*object.String); ok && s.Value == keyStr {
+					val := applyFunction(args[2], []object.Object{p.Value}, env)
+					if isError(val) {
+						return val
+					}
+					nm.Pairs = append(nm.Pairs, object.MapPair{Key: p.Key, Value: val})
+					found = true
+				} else {
+					nm.Pairs = append(nm.Pairs, p)
+				}
+			}
+			if !found {
+				nm.Pairs = append(nm.Pairs, object.MapPair{Key: args[0], Value: args[1]})
+			}
+			return nm
+		}}
+	case "filterKeys":
+		return &object.Builtin{Name: "filterKeys", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("filterKeys expects 1 argument (predicate)")
+			}
+			nm := &object.Map{}
+			for _, p := range m.Pairs {
+				val := applyFunction(args[0], []object.Object{p.Key}, env)
+				if isError(val) {
+					return val
+				}
+				if object.IsTruthy(val) {
+					nm.Pairs = append(nm.Pairs, p)
+				}
+			}
+			return nm
+		}}
+	case "filterValues":
+		return &object.Builtin{Name: "filterValues", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("filterValues expects 1 argument (predicate)")
+			}
+			nm := &object.Map{}
+			for _, p := range m.Pairs {
+				val := applyFunction(args[0], []object.Object{p.Value}, env)
+				if isError(val) {
+					return val
+				}
+				if object.IsTruthy(val) {
 					nm.Pairs = append(nm.Pairs, p)
 				}
 			}
@@ -3854,6 +4301,114 @@ func evalSetMethod(s *object.Set, method string, env *object.Environment) object
 				}
 			}
 			return object.TRUE_OBJ
+		}}
+	case "isDisjoint":
+		return &object.Builtin{Name: "isDisjoint", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("isDisjoint expects 1 argument (Set)")
+			}
+			other, ok := args[0].(*object.Set)
+			if !ok {
+				return newError("isDisjoint: argument must be a Set")
+			}
+			for k := range s.Elements {
+				if _, ok := other.Elements[k]; ok {
+					return object.FALSE_OBJ
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "symmetricDifference":
+		return &object.Builtin{Name: "symmetricDifference", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("symmetricDifference expects 1 argument (Set)")
+			}
+			other, ok := args[0].(*object.Set)
+			if !ok {
+				return newError("symmetricDifference: argument must be a Set")
+			}
+			ns := object.NewSet()
+			for k, v := range s.Elements {
+				if _, ok := other.Elements[k]; !ok {
+					ns.Elements[k] = v
+				}
+			}
+			for k, v := range other.Elements {
+				if _, ok := s.Elements[k]; !ok {
+					ns.Elements[k] = v
+				}
+			}
+			return ns
+		}}
+	case "toggle":
+		return &object.Builtin{Name: "toggle", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("toggle expects 1 argument")
+			}
+			key := args[0].Inspect()
+			ns := object.NewSet()
+			for k, v := range s.Elements {
+				ns.Elements[k] = v
+			}
+			if _, exists := ns.Elements[key]; exists {
+				delete(ns.Elements, key)
+			} else {
+				ns.Elements[key] = args[0]
+			}
+			return ns
+		}}
+	case "map":
+		return &object.Builtin{Name: "map", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("map expects 1 argument (function)")
+			}
+			ns := object.NewSet()
+			for _, v := range s.Elements {
+				val := applyFunction(args[0], []object.Object{v}, env)
+				if isError(val) {
+					return val
+				}
+				ns.Elements[val.Inspect()] = val
+			}
+			return ns
+		}}
+	case "filter":
+		return &object.Builtin{Name: "filter", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("filter expects 1 argument (predicate)")
+			}
+			ns := object.NewSet()
+			for k, v := range s.Elements {
+				val := applyFunction(args[0], []object.Object{v}, env)
+				if isError(val) {
+					return val
+				}
+				if object.IsTruthy(val) {
+					ns.Elements[k] = v
+				}
+			}
+			return ns
+		}}
+	case "flatMap":
+		return &object.Builtin{Name: "flatMap", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("flatMap expects 1 argument (function)")
+			}
+			ns := object.NewSet()
+			for _, v := range s.Elements {
+				val := applyFunction(args[0], []object.Object{v}, env)
+				if isError(val) {
+					return val
+				}
+				inner, ok := val.(*object.Set)
+				if !ok {
+					return newError("flatMap: function must return a Set")
+				}
+				for k, iv := range inner.Elements {
+					ns.Elements[k] = iv
+				}
+			}
+			return ns
 		}}
 	default:
 		return newError("no method '%s' on Set", method)

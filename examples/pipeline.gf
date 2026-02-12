@@ -71,3 +71,25 @@ println("pipe(double, addOne)(5):", doubleThenAdd(5))
 
 -- core.identity returns its argument unchanged
 println("identity(42):", core.identity(42))
+
+-- ── Dot Composition ──
+-- f . g creates a composed function where f(g(x)) (right-to-left, mathematical)
+let doubleAndInc = addOne . double
+println("(addOne . double)(5):", doubleAndInc(5))  -- 11
+
+let chain = (\x -> x * 3) . (\x -> x + 1) . (\x -> x * 2)
+println("chain(2):", chain(2))  -- 3 * ((2*2) + 1) = 15
+
+-- ── Juxtaposition Composition ──
+-- Space-separated functions compose left-to-right
+let pipeline = double addOne
+println("(double addOne)(5):", pipeline(5))  -- addOne(double(5)) = 11
+
+-- Inline application: value followed by functions
+println("5 double addOne:", 5 double addOne)  -- 11
+
+-- With partial application
+fn add(a, b) { a + b }
+let inc = add(1)
+let process = inc double
+println("(inc double)(3):", process(3))  -- double(inc(3)) = 8

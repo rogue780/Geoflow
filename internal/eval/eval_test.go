@@ -537,6 +537,91 @@ func testFloatObject(t *testing.T, obj object.Object, expected float64, input st
 	}
 }
 
+func TestDotComposition(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		// f . g → f(g(x))
+		{`fn double(x) { x * 2 }
+fn inc(x) { x + 1 }
+let f = inc . double
+f(5)`, 11}, // inc(double(5)) = inc(10) = 11
+		// Chaining: h . g . f → h(g(f(x)))
+		{`let a = \x -> x + 1
+let b = \x -> x * 2
+let c = \x -> x * 3
+let f = c . b . a
+f(1)`, 12}, // c(b(a(1))) = c(b(2)) = c(4) = 12
+		// Dot composition with lambdas (non-identifier right side)
+		{`let f = (\x -> x * 3) . (\x -> x + 1) . (\x -> x * 2)
+f(2)`, 15}, // 3 * ((2*2) + 1) = 15
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+}
+
+func TestDotCompositionDoesNotBreakFieldAccess(t *testing.T) {
+	// Dot on lists/strings should still work as field access
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{`len([1, 2, 3])`, 3},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+}
+
+func TestJuxtapositionComposition(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		// f g → g(f(x)) (left-to-right)
+		{`fn double(x) { x * 2 }
+fn inc(x) { x + 1 }
+let f = double inc
+f(5)`, 11}, // inc(double(5)) = 11
+		// Chain: a b c → c(b(a(x)))
+		{`let a = \x -> x + 1
+let b = \x -> x * 2
+let c = \x -> x * 3
+let f = a b c
+f(1)`, 12}, // c(b(a(1))) = c(b(2)) = c(4) = 12
+		// Value application: 5 double → double(5)
+		{`fn double(x) { x * 2 }
+5 double`, 10},
+		// Mixed: 5 inc double → double(inc(5))
+		{`fn double(x) { x * 2 }
+fn inc(x) { x + 1 }
+5 inc double`, 12}, // double(inc(5)) = double(6) = 12
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+}
+
+func TestJuxtapositionWithPartialApplication(t *testing.T) {
+	// inc triple → CF{Outer: triple, Inner: inc} → triple(inc(x))
+	// f(5) = triple(inc(5)) = mul(3, 6) = 18
+	input := `fn mul(a, b) { a * b }
+let triple = mul(3)
+fn inc(x) { x + 1 }
+let f = inc triple
+f(5)`
+	evaluated := testEval(input)
+	testIntegerObject(t, evaluated, 18, input)
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)
