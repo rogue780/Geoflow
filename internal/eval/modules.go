@@ -12,6 +12,7 @@ import (
 	gfassert "github.com/rogue780/geoflow/pkg/stdlib/assert"
 	"github.com/rogue780/geoflow/pkg/stdlib/collections"
 	"github.com/rogue780/geoflow/pkg/stdlib/core"
+	gfdata "github.com/rogue780/geoflow/pkg/stdlib/data"
 	gfio "github.com/rogue780/geoflow/pkg/stdlib/io"
 	gflog "github.com/rogue780/geoflow/pkg/stdlib/log"
 	gftime "github.com/rogue780/geoflow/pkg/stdlib/time"
@@ -54,6 +55,7 @@ func init() {
 	registerTimeModule(DefaultRegistry)
 	registerLogModule(DefaultRegistry)
 	registerAssertModule(DefaultRegistry)
+	registerDataModule(DefaultRegistry)
 	registerGeoModules(DefaultRegistry)
 }
 
@@ -245,6 +247,14 @@ func registerLogModule(r *ModuleRegistry) {
 func registerAssertModule(r *ModuleRegistry) {
 	r.Register("std.assert", func() *object.Module {
 		return &object.Module{Name: "assert", Exports: gfassert.GetExports()}
+	})
+}
+
+// ── std.data ──
+
+func registerDataModule(r *ModuleRegistry) {
+	r.Register("std.data", func() *object.Module {
+		return &object.Module{Name: "data", Exports: gfdata.GetExports()}
 	})
 }
 

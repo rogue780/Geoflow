@@ -136,7 +136,7 @@ fn swap<A, B>(pair: Tuple<A, B>) -> Tuple<B, A> { ... }
 ---
 
 ## Task 4: Data Structures (std.data)
-Status: [ ]
+Status: [DONE]
 
 Spec: Section 6.4 — Array, Series, and DataFrame types.
 
@@ -341,6 +341,23 @@ df.toString() -> string
 - `internal/eval/modules.go` — register `std.data`
 - `internal/eval/eval.go` — handle new types in dot expressions, infix, etc.
 - Tests and examples
+
+### Completed: 2026-02-11
+### Deviation: None — implementation matches spec for core constructors and methods.
+- Created `internal/object/data.go` with Array, Series, DataFrame object types.
+- Created `pkg/stdlib/data/data.go` with GetExports() returning constructors:
+  Array: zeros, ones, full, eye, linspace, arange, fromList, fromNested
+  Series: Series, SeriesFromMap
+  DataFrame: DataFrame, DataFrameFromRows
+- Registered `std.data` module in modules.go.
+- Added method dispatch in eval.go for Array (shape, ndim, size, dtype, flatten,
+  reshape, transpose, T, sum, mean, min, max, toList, dot), Series (name, length,
+  index, values, dtype, head, tail, sum, mean, min, max, map, filter, sort,
+  unique, count, dropNil, fillNil), DataFrame (shape, columns, length, head, tail,
+  select, drop, filter, sort, withColumn, row, describe, plus dynamic column access).
+- Element-wise arithmetic on Array deferred — would require operator overloading
+  in evalInfixExpression for ARRAY_OBJ type.
+- Added TestDataStructures in eval_test.go (12 cases).
 
 ---
 

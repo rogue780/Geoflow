@@ -4,6 +4,7 @@ package eval
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/rogue780/geoflow/internal/ast"
@@ -821,6 +822,12 @@ func evalDotExpression(node *ast.DotExpression, env *object.Environment) object.
 		return evalFeatureMethod(obj, node.Field)
 	case *object.FeatureCollection:
 		return evalFeatureCollectionMethod(obj, node.Field)
+	case *object.Array:
+		return evalArrayMethod(obj, node.Field)
+	case *object.Series:
+		return evalSeriesMethod(obj, node.Field, env)
+	case *object.DataFrame:
+		return evalDataFrameMethod(obj, node.Field, env)
 	}
 
 	// Dot composition: f . g → ComposedFunction{Outer: f, Inner: g}
@@ -4596,4 +4603,676 @@ func transformPolygon(p *object.Polygon, transform func(object.Coordinate) objec
 		}
 	}
 	return &object.Polygon{ExteriorRing: ext, InteriorRings: intRings, SRID: p.SRID}
+}
+
+// ── Array Methods ──
+
+func evalArrayMethod(a *object.Array, method string) object.Object {
+	switch method {
+	case "shape":
+		return &object.Builtin{Name: "shape", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(a.Shape))
+			for i, s := range a.Shape {
+				elems[i] = &object.Integer{Value: int64(s)}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "ndim":
+		return &object.Builtin{Name: "ndim", Fn: func(args ...object.Object) object.Object {
+			return &object.Integer{Value: int64(len(a.Shape))}
+		}}
+	case "size":
+		return &object.Builtin{Name: "size", Fn: func(args ...object.Object) object.Object {
+			return &object.Integer{Value: int64(a.Size())}
+		}}
+	case "dtype":
+		return &object.Builtin{Name: "dtype", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: "float"}
+		}}
+	case "flatten":
+		return &object.Builtin{Name: "flatten", Fn: func(args ...object.Object) object.Object {
+			data := make([]float64, len(a.Data))
+			copy(data, a.Data)
+			return &object.Array{Data: data, Shape: []int{len(data)}}
+		}}
+	case "reshape":
+		return &object.Builtin{Name: "reshape", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("reshape expects 1 argument (shape: List<int>)")
+			}
+			shapeList, ok := args[0].(*object.List)
+			if !ok {
+				return newError("reshape: argument must be a List of integers")
+			}
+			newShape := make([]int, len(shapeList.Elements))
+			total := 1
+			for i, elem := range shapeList.Elements {
+				n, ok := elem.(*object.Integer)
+				if !ok {
+					return newError("reshape: shape elements must be integers")
+				}
+				newShape[i] = int(n.Value)
+				total *= newShape[i]
+			}
+			if total != len(a.Data) {
+				return newError("reshape: new shape has %d elements but array has %d", total, len(a.Data))
+			}
+			data := make([]float64, len(a.Data))
+			copy(data, a.Data)
+			return &object.Array{Data: data, Shape: newShape}
+		}}
+	case "transpose":
+		return &object.Builtin{Name: "transpose", Fn: func(args ...object.Object) object.Object {
+			if len(a.Shape) != 2 {
+				return newError("transpose: only 2D arrays supported")
+			}
+			rows, cols := a.Shape[0], a.Shape[1]
+			data := make([]float64, len(a.Data))
+			for i := 0; i < rows; i++ {
+				for j := 0; j < cols; j++ {
+					data[j*rows+i] = a.Data[i*cols+j]
+				}
+			}
+			return &object.Array{Data: data, Shape: []int{cols, rows}}
+		}}
+	case "T":
+		if len(a.Shape) != 2 {
+			return newError("T: only 2D arrays supported")
+		}
+		rows, cols := a.Shape[0], a.Shape[1]
+		data := make([]float64, len(a.Data))
+		for i := 0; i < rows; i++ {
+			for j := 0; j < cols; j++ {
+				data[j*rows+i] = a.Data[i*cols+j]
+			}
+		}
+		return &object.Array{Data: data, Shape: []int{cols, rows}}
+	case "sum":
+		return &object.Builtin{Name: "sum", Fn: func(args ...object.Object) object.Object {
+			total := 0.0
+			for _, v := range a.Data {
+				total += v
+			}
+			return &object.Float{Value: total}
+		}}
+	case "mean":
+		return &object.Builtin{Name: "mean", Fn: func(args ...object.Object) object.Object {
+			if len(a.Data) == 0 {
+				return &object.Float{Value: 0}
+			}
+			total := 0.0
+			for _, v := range a.Data {
+				total += v
+			}
+			return &object.Float{Value: total / float64(len(a.Data))}
+		}}
+	case "min":
+		return &object.Builtin{Name: "min", Fn: func(args ...object.Object) object.Object {
+			if len(a.Data) == 0 {
+				return newError("min: empty array")
+			}
+			min := a.Data[0]
+			for _, v := range a.Data[1:] {
+				if v < min {
+					min = v
+				}
+			}
+			return &object.Float{Value: min}
+		}}
+	case "max":
+		return &object.Builtin{Name: "max", Fn: func(args ...object.Object) object.Object {
+			if len(a.Data) == 0 {
+				return newError("max: empty array")
+			}
+			max := a.Data[0]
+			for _, v := range a.Data[1:] {
+				if v > max {
+					max = v
+				}
+			}
+			return &object.Float{Value: max}
+		}}
+	case "toList":
+		return &object.Builtin{Name: "toList", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(a.Data))
+			for i, v := range a.Data {
+				elems[i] = &object.Float{Value: v}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "dot":
+		return &object.Builtin{Name: "dot", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("dot expects 1 argument")
+			}
+			other, ok := args[0].(*object.Array)
+			if !ok {
+				return newError("dot: argument must be an Array")
+			}
+			// 1D dot product
+			if len(a.Shape) == 1 && len(other.Shape) == 1 {
+				if a.Shape[0] != other.Shape[0] {
+					return newError("dot: arrays must have same length")
+				}
+				sum := 0.0
+				for i := range a.Data {
+					sum += a.Data[i] * other.Data[i]
+				}
+				return &object.Float{Value: sum}
+			}
+			// 2D matrix multiply
+			if len(a.Shape) == 2 && len(other.Shape) == 2 {
+				if a.Shape[1] != other.Shape[0] {
+					return newError("dot: incompatible shapes for matrix multiply")
+				}
+				m, k, n := a.Shape[0], a.Shape[1], other.Shape[1]
+				data := make([]float64, m*n)
+				for i := 0; i < m; i++ {
+					for j := 0; j < n; j++ {
+						sum := 0.0
+						for l := 0; l < k; l++ {
+							sum += a.Data[i*k+l] * other.Data[l*n+j]
+						}
+						data[i*n+j] = sum
+					}
+				}
+				return &object.Array{Data: data, Shape: []int{m, n}}
+			}
+			return newError("dot: only 1D and 2D arrays supported")
+		}}
+	default:
+		return newError("no method '%s' on Array", method)
+	}
+}
+
+// ── Series Methods ──
+
+func evalSeriesMethod(s *object.Series, method string, env *object.Environment) object.Object {
+	switch method {
+	case "name":
+		return &object.String{Value: s.Name}
+	case "length":
+		return &object.Builtin{Name: "length", Fn: func(args ...object.Object) object.Object {
+			return &object.Integer{Value: int64(len(s.Data))}
+		}}
+	case "index":
+		return &object.Builtin{Name: "index", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(s.Index))
+			for i, idx := range s.Index {
+				elems[i] = &object.String{Value: idx}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "values":
+		return &object.Builtin{Name: "values", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(s.Data))
+			copy(elems, s.Data)
+			return &object.List{Elements: elems}
+		}}
+	case "dtype":
+		return &object.Builtin{Name: "dtype", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: s.DType}
+		}}
+	case "head":
+		return &object.Builtin{Name: "head", Fn: func(args ...object.Object) object.Object {
+			n := 5
+			if len(args) == 1 {
+				if nObj, ok := args[0].(*object.Integer); ok {
+					n = int(nObj.Value)
+				}
+			}
+			if n > len(s.Data) {
+				n = len(s.Data)
+			}
+			data := make([]object.Object, n)
+			copy(data, s.Data[:n])
+			var idx []string
+			if len(s.Index) >= n {
+				idx = make([]string, n)
+				copy(idx, s.Index[:n])
+			}
+			return &object.Series{Data: data, Index: idx, Name: s.Name, DType: s.DType}
+		}}
+	case "tail":
+		return &object.Builtin{Name: "tail", Fn: func(args ...object.Object) object.Object {
+			n := 5
+			if len(args) == 1 {
+				if nObj, ok := args[0].(*object.Integer); ok {
+					n = int(nObj.Value)
+				}
+			}
+			if n > len(s.Data) {
+				n = len(s.Data)
+			}
+			start := len(s.Data) - n
+			data := make([]object.Object, n)
+			copy(data, s.Data[start:])
+			var idx []string
+			if len(s.Index) >= len(s.Data) {
+				idx = make([]string, n)
+				copy(idx, s.Index[start:])
+			}
+			return &object.Series{Data: data, Index: idx, Name: s.Name, DType: s.DType}
+		}}
+	case "sum":
+		return &object.Builtin{Name: "sum", Fn: func(args ...object.Object) object.Object {
+			total := 0.0
+			for _, d := range s.Data {
+				switch v := d.(type) {
+				case *object.Integer:
+					total += float64(v.Value)
+				case *object.Float:
+					total += v.Value
+				}
+			}
+			return &object.Float{Value: total}
+		}}
+	case "mean":
+		return &object.Builtin{Name: "mean", Fn: func(args ...object.Object) object.Object {
+			if len(s.Data) == 0 {
+				return &object.Float{Value: 0}
+			}
+			total := 0.0
+			for _, d := range s.Data {
+				switch v := d.(type) {
+				case *object.Integer:
+					total += float64(v.Value)
+				case *object.Float:
+					total += v.Value
+				}
+			}
+			return &object.Float{Value: total / float64(len(s.Data))}
+		}}
+	case "min":
+		return &object.Builtin{Name: "min", Fn: func(args ...object.Object) object.Object {
+			if len(s.Data) == 0 {
+				return object.NONE
+			}
+			minVal := math.Inf(1)
+			for _, d := range s.Data {
+				switch v := d.(type) {
+				case *object.Integer:
+					if float64(v.Value) < minVal {
+						minVal = float64(v.Value)
+					}
+				case *object.Float:
+					if v.Value < minVal {
+						minVal = v.Value
+					}
+				}
+			}
+			return &object.Float{Value: minVal}
+		}}
+	case "max":
+		return &object.Builtin{Name: "max", Fn: func(args ...object.Object) object.Object {
+			if len(s.Data) == 0 {
+				return object.NONE
+			}
+			maxVal := math.Inf(-1)
+			for _, d := range s.Data {
+				switch v := d.(type) {
+				case *object.Integer:
+					if float64(v.Value) > maxVal {
+						maxVal = float64(v.Value)
+					}
+				case *object.Float:
+					if v.Value > maxVal {
+						maxVal = v.Value
+					}
+				}
+			}
+			return &object.Float{Value: maxVal}
+		}}
+	case "map":
+		return &object.Builtin{Name: "map", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("Series.map expects 1 argument (function)")
+			}
+			result := make([]object.Object, len(s.Data))
+			for i, d := range s.Data {
+				val := applyFunction(args[0], []object.Object{d}, env)
+				if isError(val) {
+					return val
+				}
+				result[i] = val
+			}
+			idx := make([]string, len(s.Index))
+			copy(idx, s.Index)
+			return &object.Series{Data: result, Index: idx, Name: s.Name, DType: "mixed"}
+		}}
+	case "filter":
+		return &object.Builtin{Name: "filter", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("Series.filter expects 1 argument (predicate)")
+			}
+			var data []object.Object
+			var idx []string
+			for i, d := range s.Data {
+				val := applyFunction(args[0], []object.Object{d}, env)
+				if isError(val) {
+					return val
+				}
+				if object.IsTruthy(val) {
+					data = append(data, d)
+					if i < len(s.Index) {
+						idx = append(idx, s.Index[i])
+					}
+				}
+			}
+			if data == nil {
+				data = []object.Object{}
+			}
+			return &object.Series{Data: data, Index: idx, Name: s.Name, DType: s.DType}
+		}}
+	case "sort":
+		return &object.Builtin{Name: "sort", Fn: func(args ...object.Object) object.Object {
+			data := make([]object.Object, len(s.Data))
+			copy(data, s.Data)
+			sort.Slice(data, func(i, j int) bool {
+				return data[i].Inspect() < data[j].Inspect()
+			})
+			return &object.Series{Data: data, Name: s.Name, DType: s.DType}
+		}}
+	case "unique":
+		return &object.Builtin{Name: "unique", Fn: func(args ...object.Object) object.Object {
+			seen := make(map[string]bool)
+			var data []object.Object
+			for _, d := range s.Data {
+				key := d.Inspect()
+				if !seen[key] {
+					seen[key] = true
+					data = append(data, d)
+				}
+			}
+			return &object.Series{Data: data, Name: s.Name, DType: s.DType}
+		}}
+	case "count":
+		return &object.Builtin{Name: "count", Fn: func(args ...object.Object) object.Object {
+			count := 0
+			for _, d := range s.Data {
+				if _, ok := d.(*object.Nil); !ok {
+					count++
+				}
+			}
+			return &object.Integer{Value: int64(count)}
+		}}
+	case "dropNil":
+		return &object.Builtin{Name: "dropNil", Fn: func(args ...object.Object) object.Object {
+			var data []object.Object
+			var idx []string
+			for i, d := range s.Data {
+				if _, ok := d.(*object.Nil); !ok {
+					data = append(data, d)
+					if i < len(s.Index) {
+						idx = append(idx, s.Index[i])
+					}
+				}
+			}
+			if data == nil {
+				data = []object.Object{}
+			}
+			return &object.Series{Data: data, Index: idx, Name: s.Name, DType: s.DType}
+		}}
+	case "fillNil":
+		return &object.Builtin{Name: "fillNil", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("fillNil expects 1 argument (fill value)")
+			}
+			data := make([]object.Object, len(s.Data))
+			for i, d := range s.Data {
+				if _, ok := d.(*object.Nil); ok {
+					data[i] = args[0]
+				} else {
+					data[i] = d
+				}
+			}
+			idx := make([]string, len(s.Index))
+			copy(idx, s.Index)
+			return &object.Series{Data: data, Index: idx, Name: s.Name, DType: s.DType}
+		}}
+	default:
+		return newError("no method '%s' on Series", method)
+	}
+}
+
+// ── DataFrame Methods ──
+
+func evalDataFrameMethod(df *object.DataFrame, method string, env *object.Environment) object.Object {
+	switch method {
+	case "shape":
+		return &object.Builtin{Name: "shape", Fn: func(args ...object.Object) object.Object {
+			return &object.Tuple{Elements: []object.Object{
+				&object.Integer{Value: int64(df.Length)},
+				&object.Integer{Value: int64(len(df.ColOrder))},
+			}}
+		}}
+	case "columns":
+		return &object.Builtin{Name: "columns", Fn: func(args ...object.Object) object.Object {
+			elems := make([]object.Object, len(df.ColOrder))
+			for i, col := range df.ColOrder {
+				elems[i] = &object.String{Value: col}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "length":
+		return &object.Builtin{Name: "length", Fn: func(args ...object.Object) object.Object {
+			return &object.Integer{Value: int64(df.Length)}
+		}}
+	case "head":
+		return &object.Builtin{Name: "head", Fn: func(args ...object.Object) object.Object {
+			n := 5
+			if len(args) == 1 {
+				if nObj, ok := args[0].(*object.Integer); ok {
+					n = int(nObj.Value)
+				}
+			}
+			if n > df.Length {
+				n = df.Length
+			}
+			cols := make(map[string]*object.Series)
+			for _, colName := range df.ColOrder {
+				s := df.Columns[colName]
+				data := make([]object.Object, n)
+				copy(data, s.Data[:n])
+				cols[colName] = &object.Series{Data: data, Name: colName, DType: s.DType}
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: df.ColOrder, Length: n}
+		}}
+	case "tail":
+		return &object.Builtin{Name: "tail", Fn: func(args ...object.Object) object.Object {
+			n := 5
+			if len(args) == 1 {
+				if nObj, ok := args[0].(*object.Integer); ok {
+					n = int(nObj.Value)
+				}
+			}
+			if n > df.Length {
+				n = df.Length
+			}
+			start := df.Length - n
+			cols := make(map[string]*object.Series)
+			for _, colName := range df.ColOrder {
+				s := df.Columns[colName]
+				data := make([]object.Object, n)
+				copy(data, s.Data[start:])
+				cols[colName] = &object.Series{Data: data, Name: colName, DType: s.DType}
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: df.ColOrder, Length: n}
+		}}
+	case "select":
+		return &object.Builtin{Name: "select", Fn: func(args ...object.Object) object.Object {
+			var colNames []string
+			for _, arg := range args {
+				s, ok := arg.(*object.String)
+				if !ok {
+					return newError("select: arguments must be column names (strings)")
+				}
+				colNames = append(colNames, s.Value)
+			}
+			cols := make(map[string]*object.Series)
+			for _, colName := range colNames {
+				s, ok := df.Columns[colName]
+				if !ok {
+					return newError("select: column '%s' not found", colName)
+				}
+				cols[colName] = s
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: colNames, Length: df.Length}
+		}}
+	case "drop":
+		return &object.Builtin{Name: "drop", Fn: func(args ...object.Object) object.Object {
+			dropSet := make(map[string]bool)
+			for _, arg := range args {
+				s, ok := arg.(*object.String)
+				if !ok {
+					return newError("drop: arguments must be column names (strings)")
+				}
+				dropSet[s.Value] = true
+			}
+			var colOrder []string
+			cols := make(map[string]*object.Series)
+			for _, colName := range df.ColOrder {
+				if !dropSet[colName] {
+					colOrder = append(colOrder, colName)
+					cols[colName] = df.Columns[colName]
+				}
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: colOrder, Length: df.Length}
+		}}
+	case "filter":
+		return &object.Builtin{Name: "filter", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("DataFrame.filter expects 1 argument (predicate)")
+			}
+			var indices []int
+			for i := 0; i < df.Length; i++ {
+				row := make([]object.MapPair, len(df.ColOrder))
+				for j, colName := range df.ColOrder {
+					row[j] = object.MapPair{Key: &object.String{Value: colName}, Value: df.Columns[colName].Data[i]}
+				}
+				rowMap := &object.Map{Pairs: row}
+				val := applyFunction(args[0], []object.Object{rowMap}, env)
+				if isError(val) {
+					return val
+				}
+				if object.IsTruthy(val) {
+					indices = append(indices, i)
+				}
+			}
+			cols := make(map[string]*object.Series)
+			for _, colName := range df.ColOrder {
+				s := df.Columns[colName]
+				data := make([]object.Object, len(indices))
+				for j, idx := range indices {
+					data[j] = s.Data[idx]
+				}
+				cols[colName] = &object.Series{Data: data, Name: colName, DType: s.DType}
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: df.ColOrder, Length: len(indices)}
+		}}
+	case "sort":
+		return &object.Builtin{Name: "sort", Fn: func(args ...object.Object) object.Object {
+			if len(args) < 1 {
+				return newError("DataFrame.sort expects at least 1 argument (column name)")
+			}
+			colName, ok := args[0].(*object.String)
+			if !ok {
+				return newError("DataFrame.sort: first argument must be a column name")
+			}
+			col, exists := df.Columns[colName.Value]
+			if !exists {
+				return newError("DataFrame.sort: column '%s' not found", colName.Value)
+			}
+			ascending := true
+			if len(args) >= 2 {
+				if b, ok := args[1].(*object.Boolean); ok {
+					ascending = b.Value
+				}
+			}
+			indices := make([]int, df.Length)
+			for i := range indices {
+				indices[i] = i
+			}
+			sort.Slice(indices, func(i, j int) bool {
+				a, b := col.Data[indices[i]].Inspect(), col.Data[indices[j]].Inspect()
+				if ascending {
+					return a < b
+				}
+				return a > b
+			})
+			cols := make(map[string]*object.Series)
+			for _, cn := range df.ColOrder {
+				s := df.Columns[cn]
+				data := make([]object.Object, df.Length)
+				for k, idx := range indices {
+					data[k] = s.Data[idx]
+				}
+				cols[cn] = &object.Series{Data: data, Name: cn, DType: s.DType}
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: df.ColOrder, Length: df.Length}
+		}}
+	case "withColumn":
+		return &object.Builtin{Name: "withColumn", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("withColumn expects 2 arguments (name, function)")
+			}
+			colName, ok := args[0].(*object.String)
+			if !ok {
+				return newError("withColumn: first argument must be a string")
+			}
+			cols := make(map[string]*object.Series)
+			for k, v := range df.Columns {
+				cols[k] = v
+			}
+			data := make([]object.Object, df.Length)
+			for i := 0; i < df.Length; i++ {
+				row := make([]object.MapPair, len(df.ColOrder))
+				for j, cn := range df.ColOrder {
+					row[j] = object.MapPair{Key: &object.String{Value: cn}, Value: df.Columns[cn].Data[i]}
+				}
+				rowMap := &object.Map{Pairs: row}
+				val := applyFunction(args[1], []object.Object{rowMap}, env)
+				if isError(val) {
+					return val
+				}
+				data[i] = val
+			}
+			cols[colName.Value] = &object.Series{Data: data, Name: colName.Value, DType: "mixed"}
+			colOrder := make([]string, len(df.ColOrder))
+			copy(colOrder, df.ColOrder)
+			if _, exists := df.Columns[colName.Value]; !exists {
+				colOrder = append(colOrder, colName.Value)
+			}
+			return &object.DataFrame{Columns: cols, ColOrder: colOrder, Length: df.Length}
+		}}
+	case "row":
+		return &object.Builtin{Name: "row", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("row expects 1 argument (index)")
+			}
+			idx, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("row: argument must be an integer")
+			}
+			i := int(idx.Value)
+			if i < 0 || i >= df.Length {
+				return newError("row: index %d out of bounds [0, %d)", i, df.Length)
+			}
+			pairs := make([]object.MapPair, len(df.ColOrder))
+			for j, colName := range df.ColOrder {
+				pairs[j] = object.MapPair{Key: &object.String{Value: colName}, Value: df.Columns[colName].Data[i]}
+			}
+			return &object.Map{Pairs: pairs}
+		}}
+	case "describe":
+		return &object.Builtin{Name: "describe", Fn: func(args ...object.Object) object.Object {
+			return &object.String{Value: df.Inspect()}
+		}}
+	default:
+		// Try to access a column by name
+		if s, ok := df.Columns[method]; ok {
+			return s
+		}
+		return newError("no method or column '%s' on DataFrame", method)
+	}
 }

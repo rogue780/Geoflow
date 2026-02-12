@@ -755,6 +755,64 @@ len2([1, 2, 3])`
 	testIntegerObject(t, evaluated2, 3, input2)
 }
 
+func TestDataStructures(t *testing.T) {
+	// Array constructors
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`import std.data
+let a = data.zeros([3])
+a.size()`, "3"},
+		{`import std.data
+let a = data.ones([2, 3])
+a.ndim()`, "2"},
+		{`import std.data
+let a = data.eye(3)
+a.shape()`, "[3, 3]"},
+		{`import std.data
+let a = data.linspace(0, 10, 5)
+a.size()`, "5"},
+		{`import std.data
+let a = data.fromList([1, 2, 3, 4])
+a.sum()`, "10.0"},
+		{`import std.data
+let a = data.fromList([1, 2, 3, 4])
+a.mean()`, "2.5"},
+		{`import std.data
+let a = data.fromNested([[1, 2], [3, 4]])
+a.shape()`, "[2, 2]"},
+		// Series
+		{`import std.data
+let s = data.Series([10, 20, 30])
+s.length()`, "3"},
+		{`import std.data
+let s = data.Series([10, 20, 30], "values")
+s.name`, "values"},
+		{`import std.data
+let s = data.Series([1, 2, 3])
+s.sum()`, "6.0"},
+		// DataFrame
+		{`import std.data
+let df = data.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+df.length()`, "3"},
+		{`import std.data
+let df = data.DataFrame({"x": [10, 20], "y": [30, 40]})
+df.shape()`, "(2, 2)"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)
