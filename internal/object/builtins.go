@@ -459,6 +459,29 @@ func GetBuiltins() map[string]*Builtin {
 				return &Float{Value: math.Sqrt(val.Value)}
 			},
 		},
+		"byte": {
+			Name: "byte",
+			Fn: func(args ...Object) Object {
+				if len(args) != 1 {
+					return &Error{Message: "byte expects 1 argument (integer 0-255)"}
+				}
+				switch v := args[0].(type) {
+				case *Integer:
+					if v.Value < 0 || v.Value > 255 {
+						return &Error{Message: fmt.Sprintf("byte value %d out of range (0-255)", v.Value)}
+					}
+					return &Integer{Value: v.Value}
+				case *Float:
+					i := int64(v.Value)
+					if i < 0 || i > 255 {
+						return &Error{Message: fmt.Sprintf("byte value %d out of range (0-255)", i)}
+					}
+					return &Integer{Value: i}
+				default:
+					return &Error{Message: "byte expects a numeric argument"}
+				}
+			},
+		},
 	}
 }
 

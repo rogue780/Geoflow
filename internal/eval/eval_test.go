@@ -1025,6 +1025,501 @@ result > 0`, "true"},
 	}
 }
 
+// Task 10: CRS/Transform tests
+func TestCRSTransform(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// CRS construction via fromEPSG (returns Result, unwrap with ?)
+		{`import std.geo.crs as crs
+let c = crs.fromEPSG(4326)?
+c.name`, "WGS 84"},
+		// CRS isGeographic (property)
+		{`import std.geo.crs as crs
+let c = crs.fromEPSG(4326)?
+c.isGeographic`, "true"},
+		// CRS isProjected for Web Mercator (property)
+		{`import std.geo.crs as crs
+let c = crs.fromEPSG(3857)?
+c.isProjected`, "true"},
+		// CRS toProj4 (property)
+		{`import std.geo.crs as crs
+let c = crs.fromEPSG(4326)?
+c.toProj4 != ""`, "true"},
+		// CRS datum (property)
+		{`import std.geo.crs as crs
+let c = crs.fromEPSG(4326)?
+c.datum != ""`, "true"},
+		// Transform toWebMercator returns a point
+		{`import std.geo.transform as t
+let p = #POINT(0 0)#
+let wm = t.toWebMercator(p)
+wm != nil`, "true"},
+		// Transform fromWebMercator returns a point
+		{`import std.geo.transform as t
+let wm = t.toWebMercator(#POINT(0 0)#)
+let back = t.fromWebMercator(wm)
+back != nil`, "true"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 11: Linear Algebra tests
+func TestLinearAlgebra(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Vector construction
+		{`import std.math.linalg as la
+let v = la.vector([1.0, 2.0, 3.0])
+v`, "vec(1.0, 2.0, 3.0)"},
+		// Identity matrix trace
+		{`import std.math.linalg as la
+let m = la.eye(2)
+la.trace(m)`, "2.0"},
+		// Zeros matrix norm
+		{`import std.math.linalg as la
+let m = la.zeros(2, 3)
+la.matrixNorm(m)`, "0.0"},
+		// Determinant of 2x2
+		{`import std.math.linalg as la
+let m = la.matrix([1.0, 2.0], [3.0, 4.0])
+la.det(m)`, "-2.0"},
+		// Solve Ax=b
+		{`import std.math.linalg as la
+let A = la.matrix([2.0, 1.0], [1.0, 3.0])
+let b = la.vector([5.0, 10.0])
+let x = la.solve(A, b)
+x`, "vec(1.0, 3.0)"},
+		// Matrix rank
+		{`import std.math.linalg as la
+let m = la.eye(3)
+la.rank(m)`, "3"},
+		// Hilbert 2x2: H[0][0]=1, H[1][1]=1/3, trace = 4/3 = 1.333...
+		{`import std.math.linalg as la
+let h = la.hilbert(2)
+la.det(h) > 0`, "true"},
+		// Kronecker product trace
+		{`import std.math.linalg as la
+let a = la.eye(2)
+let b = la.eye(3)
+let k = la.kronecker(a, b)
+la.trace(k)`, "6.0"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 12: Geography tests
+func TestGeography(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Geodesic distance (great circle)
+		{`import std.geo.geog as geog
+let d = geog.distanceGreatCircle(#POINT(0 0)#, #POINT(0 1)#)
+d > 100000`, "true"},
+		// Bearing between points
+		{`import std.geo.geog as geog
+let b = geog.bearing(#POINT(0 0)#, #POINT(1 0)#)
+b >= 0.0`, "true"},
+		// Buffer creates a polygon
+		{`import std.geo.geog as geog
+let p = #POINT(0 0)#
+let poly = geog.buffer(p, 1000.0)
+poly != nil`, "true"},
+		// fromLatLon
+		{`import std.geo.geog as geog
+let p = geog.fromLatLon(51.5, -0.1)
+p`, "POINT (-0.1 51.5)"},
+		// Interpolate between points
+		{`import std.geo.geog as geog
+let p = geog.interpolate(#POINT(0 0)#, #POINT(10 0)#, 0.5)
+p != nil`, "true"},
+		// Destination point
+		{`import std.geo.geog as geog
+let p = geog.destination(#POINT(0 0)#, 90.0, 100000.0)
+p != nil`, "true"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 13: Assertions tests (assertions return nil on success, Error on failure)
+func TestAssertions(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// assert.equal (returns nil on success)
+		{`import std.assert as assert
+assert.equal(1, 1)
+"pass"`, "pass"},
+		// assert.notEqual
+		{`import std.assert as assert
+assert.notEqual(1, 2)
+"pass"`, "pass"},
+		// assert.approximately
+		{`import std.assert as assert
+assert.approximately(3.14159, 3.14160, 0.001)
+"pass"`, "pass"},
+		// assert.greaterThan
+		{`import std.assert as assert
+assert.greaterThan(5, 3)
+"pass"`, "pass"},
+		// assert.lessThan
+		{`import std.assert as assert
+assert.lessThan(3, 5)
+"pass"`, "pass"},
+		// assert.contains for list
+		{`import std.assert as assert
+assert.contains([1, 2, 3], 2)
+"pass"`, "pass"},
+		// assert.empty
+		{`import std.assert as assert
+assert.empty([])
+"pass"`, "pass"},
+		// assert.positive
+		{`import std.assert as assert
+assert.positive(5.0)
+"pass"`, "pass"},
+		// assert.negative
+		{`import std.assert as assert
+assert.negative(-3.0)
+"pass"`, "pass"},
+		// assert.startsWith
+		{`import std.assert as assert
+assert.startsWith("hello world", "hello")
+"pass"`, "pass"},
+		// assert.endsWith
+		{`import std.assert as assert
+assert.endsWith("hello world", "world")
+"pass"`, "pass"},
+		// assert.blank for empty string
+		{`import std.assert as assert
+assert.blank("")
+"pass"`, "pass"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 14: Logging tests (log functions return nil on success)
+func TestLogging(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// setLevel returns nil on success
+		{`import std.log as log
+log.setLevel("debug")
+"pass"`, "pass"},
+		// withContext returns a map
+		{`import std.log as log
+let ctx = log.withContext({"module": "test"})
+ctx != nil`, "true"},
+		// setFormat returns nil on success
+		{`import std.log as log
+log.setFormat("%level - %message")
+"pass"`, "pass"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 15: Statistics tests
+func TestStatistics(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Existing stats (floats return with .0)
+		{`import std.math.stats as stats
+stats.mean([1.0, 2.0, 3.0, 4.0, 5.0])`, "3.0"},
+		// Skewness
+		{`import std.math.stats as stats
+let s = stats.skewness([1.0, 2.0, 3.0, 4.0, 5.0])
+s >= -1.0 && s <= 1.0`, "true"},
+		// Kurtosis
+		{`import std.math.stats as stats
+let k = stats.kurtosis([1.0, 2.0, 3.0, 4.0, 5.0])
+k >= -10.0 && k <= 10.0`, "true"},
+		// Weighted mean
+		{`import std.math.stats as stats
+let wm = stats.weightedMean([1.0, 2.0, 3.0], [1.0, 1.0, 1.0])
+wm`, "2.0"},
+		// Linear regression returns struct
+		{`import std.math.stats as stats
+let model = stats.linearRegression([1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 8.0])
+model.slope`, "2.0"},
+		// Min-max scale
+		{`import std.math.stats as stats
+let scaled = stats.minMaxScale([1.0, 2.0, 3.0, 4.0, 5.0])
+len(scaled)`, "5"},
+		// Standardize
+		{`import std.math.stats as stats
+let z = stats.standardize([1.0, 2.0, 3.0, 4.0, 5.0])
+len(z)`, "5"},
+		// Product
+		{`import std.math.stats as stats
+stats.product([2.0, 3.0, 4.0])`, "24.0"},
+		// EWMA
+		{`import std.math.stats as stats
+let e = stats.ewma([1.0, 2.0, 3.0, 4.0], 0.5)
+len(e)`, "4"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 16: Extended string methods tests
+func TestStringMethodsExtended(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// titleCase
+		{`"hello world".titleCase()`, "Hello World"},
+		// strip
+		{`"***hello***".strip("*")`, "hello"},
+		// slice
+		{`"hello world".slice(0, 5)`, "hello"},
+		// insert
+		{`"helo".insert(3, "l")`, "hello"},
+		// remove
+		{`"hello world".remove(5, 11)`, "hello"},
+		// matches
+		{`"hello123".matches("[0-9]+")`, "true"},
+		// findAll
+		{`let results = "cat bat hat".findAll("[a-z]at")
+len(results)`, "3"},
+		// replaceRegex
+		{`"foo123bar456".replaceRegex("[0-9]+", "NUM")`, "fooNUMbarNUM"},
+		// parseInt (returns Result)
+		{`"42".parseInt()`, "Ok(42)"},
+		// parseFloat (returns Result)
+		{`"3.14".parseFloat()`, "Ok(3.14)"},
+		// parseBool (returns Result)
+		{`"true".parseBool()`, "Ok(true)"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 18: Geometry methods tests
+func TestGeometryMethods(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Point equals
+		{`#POINT(1 2)#.equals(#POINT(1 2)#)`, "true"},
+		// Point coordinateDimension (property, not method)
+		{`#POINT(1 2)#.coordinateDimension`, "2"},
+		// LineString equals
+		{`#LINESTRING(0 0, 1 1)#.equals(#LINESTRING(0 0, 1 1)#)`, "true"},
+		// Polygon covers
+		{`let poly = #POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))#
+let pt = #POINT(5 5)#
+poly.covers(pt)`, "true"},
+		// isSimple for point (property, not method)
+		{`#POINT(1 2)#.isSimple`, "true"},
+		// translate point
+		{`let p = #POINT(1 2)#
+p.translate(3.0, 4.0)`, "POINT (4 6)"},
+		// scale point
+		{`let p = #POINT(2 3)#
+p.scale(2.0)`, "POINT (4 6)"},
+		// rotate point (90 degrees = pi/2)
+		{`let p = #POINT(1 0)#
+let r = p.rotate(1.5707963267948966)
+r != nil`, "true"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 19: DateTime methods tests
+func TestDateTimeMethods(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// DateTime.now exists
+		{`import std.time as time
+let dt = time.now()
+dt != nil`, "true"},
+		// fromUnixMillis
+		{`import std.time as time
+let dt = time.fromUnixMillis(0)
+dt != nil`, "true"},
+		// instant
+		{`import std.time as time
+let i = time.instant()
+i != nil`, "true"},
+		// DateTime quarter (property)
+		{`import std.time as time
+let dt = time.parse("2024-03-15T12:00:00Z", "RFC3339")?
+dt.quarter`, "1"},
+		// DateTime isBefore (method)
+		{`import std.time as time
+let a = time.parse("2024-01-01T00:00:00Z", "RFC3339")?
+let b = time.parse("2024-06-01T00:00:00Z", "RFC3339")?
+a.isBefore(b)`, "true"},
+		// DateTime isAfter (method)
+		{`import std.time as time
+let a = time.parse("2024-06-01T00:00:00Z", "RFC3339")?
+let b = time.parse("2024-01-01T00:00:00Z", "RFC3339")?
+a.isAfter(b)`, "true"},
+		// DateTime startOfDay (property) then .hour (property)
+		{`import std.time as time
+let dt = time.parse("2024-03-15T14:30:00Z", "RFC3339")?
+dt.startOfDay.hour`, "0"},
+		// DateTime startOfMonth (property) then .day (property)
+		{`import std.time as time
+let dt = time.parse("2024-03-15T14:30:00Z", "RFC3339")?
+dt.startOfMonth.day`, "1"},
+		// DateTime withYear (method) then .year (property)
+		{`import std.time as time
+let dt = time.parse("2024-03-15T14:30:00Z", "RFC3339")?
+dt.withYear(2025).year`, "2025"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 20: I/O tests
+func TestIOExtensions(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// path.relative returns a Result
+		{`import std.io as io
+let r = io.relative("/home/user", "/home/user/docs/file.txt")?
+r`, "docs/file.txt"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+// Task 21: Miscellaneous tests
+func TestByteBuiltin(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`byte(65)`, "65"},
+		{`byte(0)`, "0"},
+		{`byte(255)`, "255"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)

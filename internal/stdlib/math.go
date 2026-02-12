@@ -779,6 +779,486 @@ func addStatisticsBuiltins(builtins map[string]*object.Builtin) {
 			return &object.List{Elements: elems}
 		},
 	}
+
+	builtins["quartiles"] = &object.Builtin{
+		Name: "quartiles",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("quartiles", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				return &object.Error{Message: "quartiles of empty list"}
+			}
+			sorted := make([]float64, len(vals))
+			copy(sorted, vals)
+			sort.Float64s(sorted)
+			q1 := percentileOfSorted(sorted, 25)
+			q2 := percentileOfSorted(sorted, 50)
+			q3 := percentileOfSorted(sorted, 75)
+			return &object.Tuple{Elements: []object.Object{
+				&object.Float{Value: q1},
+				&object.Float{Value: q2},
+				&object.Float{Value: q3},
+			}}
+		},
+	}
+
+	builtins["statRange"] = &object.Builtin{
+		Name: "statRange",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("statRange", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				return &object.Error{Message: "statRange of empty list"}
+			}
+			min, max := vals[0], vals[0]
+			for _, v := range vals[1:] {
+				if v < min {
+					min = v
+				}
+				if v > max {
+					max = v
+				}
+			}
+			return &object.Float{Value: max - min}
+		},
+	}
+
+	builtins["product"] = &object.Builtin{
+		Name: "product",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("product", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				return &object.Float{Value: 1}
+			}
+			prod := 1.0
+			for _, v := range vals {
+				prod *= v
+			}
+			return &object.Float{Value: prod}
+		},
+	}
+
+	builtins["weightedMean"] = &object.Builtin{
+		Name: "weightedMean",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("weightedMean", 2, len(args))
+			}
+			vals, err1 := toFloatSlice(args[0])
+			weights, err2 := toFloatSlice(args[1])
+			if err1 != nil {
+				return err1
+			}
+			if err2 != nil {
+				return err2
+			}
+			if len(vals) != len(weights) {
+				return &object.Error{Message: "weightedMean: values and weights must have equal length"}
+			}
+			if len(vals) == 0 {
+				return &object.Error{Message: "weightedMean of empty list"}
+			}
+			sumW := 0.0
+			sumWV := 0.0
+			for i := range vals {
+				sumW += weights[i]
+				sumWV += vals[i] * weights[i]
+			}
+			if sumW == 0 {
+				return &object.Error{Message: "weightedMean: sum of weights is zero"}
+			}
+			return &object.Float{Value: sumWV / sumW}
+		},
+	}
+
+	builtins["weightedVariance"] = &object.Builtin{
+		Name: "weightedVariance",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("weightedVariance", 2, len(args))
+			}
+			vals, err1 := toFloatSlice(args[0])
+			weights, err2 := toFloatSlice(args[1])
+			if err1 != nil {
+				return err1
+			}
+			if err2 != nil {
+				return err2
+			}
+			if len(vals) != len(weights) {
+				return &object.Error{Message: "weightedVariance: values and weights must have equal length"}
+			}
+			if len(vals) < 2 {
+				return &object.Error{Message: "weightedVariance requires at least 2 values"}
+			}
+			// Compute weighted mean
+			sumW := 0.0
+			sumWV := 0.0
+			for i := range vals {
+				sumW += weights[i]
+				sumWV += vals[i] * weights[i]
+			}
+			if sumW == 0 {
+				return &object.Error{Message: "weightedVariance: sum of weights is zero"}
+			}
+			wMean := sumWV / sumW
+			// Compute weighted variance (reliability weights)
+			sumW2 := 0.0
+			for _, w := range weights {
+				sumW2 += w * w
+			}
+			sumWD := 0.0
+			for i := range vals {
+				d := vals[i] - wMean
+				sumWD += weights[i] * d * d
+			}
+			denom := sumW - sumW2/sumW
+			if denom == 0 {
+				return &object.Float{Value: 0}
+			}
+			return &object.Float{Value: sumWD / denom}
+		},
+	}
+
+	builtins["spearman"] = &object.Builtin{
+		Name: "spearman",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("spearman", 2, len(args))
+			}
+			xs, err1 := toFloatSlice(args[0])
+			ys, err2 := toFloatSlice(args[1])
+			if err1 != nil {
+				return err1
+			}
+			if err2 != nil {
+				return err2
+			}
+			if len(xs) != len(ys) {
+				return &object.Error{Message: "spearman requires lists of equal length"}
+			}
+			n := len(xs)
+			if n < 2 {
+				return &object.Error{Message: "spearman requires at least 2 data points"}
+			}
+			rankX := computeRanks(xs)
+			rankY := computeRanks(ys)
+			// Pearson correlation of ranks
+			mx, my := computeMean(rankX), computeMean(rankY)
+			var sxy, sxx, syy float64
+			for i := range rankX {
+				dx, dy := rankX[i]-mx, rankY[i]-my
+				sxy += dx * dy
+				sxx += dx * dx
+				syy += dy * dy
+			}
+			denom := math.Sqrt(sxx * syy)
+			if denom == 0 {
+				return &object.Float{Value: 0}
+			}
+			return &object.Float{Value: sxy / denom}
+		},
+	}
+
+	builtins["kendall"] = &object.Builtin{
+		Name: "kendall",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("kendall", 2, len(args))
+			}
+			xs, err1 := toFloatSlice(args[0])
+			ys, err2 := toFloatSlice(args[1])
+			if err1 != nil {
+				return err1
+			}
+			if err2 != nil {
+				return err2
+			}
+			if len(xs) != len(ys) {
+				return &object.Error{Message: "kendall requires lists of equal length"}
+			}
+			n := len(xs)
+			if n < 2 {
+				return &object.Error{Message: "kendall requires at least 2 data points"}
+			}
+			concordant := 0
+			discordant := 0
+			for i := 0; i < n-1; i++ {
+				for j := i + 1; j < n; j++ {
+					dx := xs[j] - xs[i]
+					dy := ys[j] - ys[i]
+					product := dx * dy
+					if product > 0 {
+						concordant++
+					} else if product < 0 {
+						discordant++
+					}
+				}
+			}
+			denom := float64(n*(n-1)) / 2
+			if denom == 0 {
+				return &object.Float{Value: 0}
+			}
+			return &object.Float{Value: float64(concordant-discordant) / denom}
+		},
+	}
+
+	builtins["autocorr"] = &object.Builtin{
+		Name: "autocorr",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("autocorr", 2, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			lagObj, ok := args[1].(*object.Integer)
+			if !ok || lagObj.Value < 0 {
+				return &object.Error{Message: "autocorr: lag must be a non-negative integer"}
+			}
+			lag := int(lagObj.Value)
+			n := len(vals)
+			if lag >= n {
+				return &object.Error{Message: "autocorr: lag must be less than data length"}
+			}
+			mean := computeMean(vals)
+			var num, den float64
+			for i := 0; i < n; i++ {
+				den += (vals[i] - mean) * (vals[i] - mean)
+			}
+			if den == 0 {
+				return &object.Float{Value: 0}
+			}
+			for i := 0; i < n-lag; i++ {
+				num += (vals[i] - mean) * (vals[i+lag] - mean)
+			}
+			return &object.Float{Value: num / den}
+		},
+	}
+
+	builtins["linearRegression"] = &object.Builtin{
+		Name: "linearRegression",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("linearRegression", 2, len(args))
+			}
+			xs, err1 := toFloatSlice(args[0])
+			ys, err2 := toFloatSlice(args[1])
+			if err1 != nil {
+				return err1
+			}
+			if err2 != nil {
+				return err2
+			}
+			if len(xs) != len(ys) {
+				return &object.Error{Message: "linearRegression requires lists of equal length"}
+			}
+			n := len(xs)
+			if n < 2 {
+				return &object.Error{Message: "linearRegression requires at least 2 data points"}
+			}
+			mx, my := computeMean(xs), computeMean(ys)
+			var sxy, sxx float64
+			for i := range xs {
+				dx := xs[i] - mx
+				sxy += dx * (ys[i] - my)
+				sxx += dx * dx
+			}
+			if sxx == 0 {
+				return &object.Error{Message: "linearRegression: all x values are identical"}
+			}
+			slope := sxy / sxx
+			intercept := my - slope*mx
+			var ssRes, ssTot float64
+			for i := range xs {
+				predicted := slope*xs[i] + intercept
+				ssRes += (ys[i] - predicted) * (ys[i] - predicted)
+				ssTot += (ys[i] - my) * (ys[i] - my)
+			}
+			rSquared := 0.0
+			if ssTot != 0 {
+				rSquared = 1 - ssRes/ssTot
+			}
+			stdErr := 0.0
+			if n > 2 {
+				stdErr = math.Sqrt(ssRes / float64(n-2))
+			}
+			return &object.Struct{
+				TypeName: "LinearRegression",
+				Fields: map[string]object.Object{
+					"slope":     &object.Float{Value: slope},
+					"intercept": &object.Float{Value: intercept},
+					"rSquared":  &object.Float{Value: rSquared},
+					"stdErr":    &object.Float{Value: stdErr},
+				},
+				Order: []string{"slope", "intercept", "rSquared", "stdErr"},
+			}
+		},
+	}
+
+	builtins["minMaxScale"] = &object.Builtin{
+		Name: "minMaxScale",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) < 1 || len(args) > 3 {
+				return &object.Error{Message: "minMaxScale expects 1-3 arguments (data, newMin?, newMax?)"}
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) == 0 {
+				return &object.List{Elements: []object.Object{}}
+			}
+			newMin := 0.0
+			newMax := 1.0
+			if len(args) >= 2 {
+				v, ok := toFloat(args[1])
+				if !ok {
+					return &object.Error{Message: "minMaxScale: newMin must be a number"}
+				}
+				newMin = v
+			}
+			if len(args) >= 3 {
+				v, ok := toFloat(args[2])
+				if !ok {
+					return &object.Error{Message: "minMaxScale: newMax must be a number"}
+				}
+				newMax = v
+			}
+			min, max := vals[0], vals[0]
+			for _, v := range vals[1:] {
+				if v < min {
+					min = v
+				}
+				if v > max {
+					max = v
+				}
+			}
+			rng := max - min
+			elems := make([]object.Object, len(vals))
+			for i, v := range vals {
+				if rng == 0 {
+					elems[i] = &object.Float{Value: newMin}
+				} else {
+					elems[i] = &object.Float{Value: newMin + (v-min)/(rng)*(newMax-newMin)}
+				}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
+
+	builtins["standardize"] = &object.Builtin{
+		Name: "standardize",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return errArgs("standardize", 1, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			if len(vals) < 2 {
+				return &object.Error{Message: "standardize requires at least 2 values"}
+			}
+			mean := computeMean(vals)
+			sumSq := 0.0
+			for _, v := range vals {
+				d := v - mean
+				sumSq += d * d
+			}
+			sd := math.Sqrt(sumSq / float64(len(vals)-1))
+			elems := make([]object.Object, len(vals))
+			if sd == 0 {
+				for i := range vals {
+					elems[i] = &object.Float{Value: 0}
+				}
+			} else {
+				for i, v := range vals {
+					elems[i] = &object.Float{Value: (v - mean) / sd}
+				}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
+
+	builtins["movingStd"] = &object.Builtin{
+		Name: "movingStd",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("movingStd", 2, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			wObj, ok := args[1].(*object.Integer)
+			if !ok || wObj.Value < 2 {
+				return &object.Error{Message: "movingStd: window must be an integer >= 2"}
+			}
+			window := int(wObj.Value)
+			if window > len(vals) {
+				return &object.Error{Message: "movingStd: window larger than data length"}
+			}
+			resultLen := len(vals) - window + 1
+			elems := make([]object.Object, resultLen)
+			for i := 0; i < resultLen; i++ {
+				chunk := vals[i : i+window]
+				m := computeMean(chunk)
+				sumSq := 0.0
+				for _, v := range chunk {
+					d := v - m
+					sumSq += d * d
+				}
+				elems[i] = &object.Float{Value: math.Sqrt(sumSq / float64(window-1))}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
+
+	builtins["ewma"] = &object.Builtin{
+		Name: "ewma",
+		Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return errArgs("ewma", 2, len(args))
+			}
+			vals, err := toFloatSlice(args[0])
+			if err != nil {
+				return err
+			}
+			alpha, ok := toFloat(args[1])
+			if !ok || alpha <= 0 || alpha > 1 {
+				return &object.Error{Message: "ewma: alpha must be a number in (0, 1]"}
+			}
+			if len(vals) == 0 {
+				return &object.List{Elements: []object.Object{}}
+			}
+			elems := make([]object.Object, len(vals))
+			elems[0] = &object.Float{Value: vals[0]}
+			prev := vals[0]
+			for i := 1; i < len(vals); i++ {
+				prev = alpha*vals[i] + (1-alpha)*prev
+				elems[i] = &object.Float{Value: prev}
+			}
+			return &object.List{Elements: elems}
+		},
+	}
 }
 
 // percentileOfSorted computes the p-th percentile of an already-sorted slice.
@@ -799,6 +1279,37 @@ func computeMean(vals []float64) float64 {
 		sum += v
 	}
 	return sum / float64(len(vals))
+}
+
+// computeRanks returns average ranks for the given values (handles ties).
+func computeRanks(vals []float64) []float64 {
+	n := len(vals)
+	type indexedVal struct {
+		val float64
+		idx int
+	}
+	iv := make([]indexedVal, n)
+	for i, v := range vals {
+		iv[i] = indexedVal{v, i}
+	}
+	sort.Slice(iv, func(i, j int) bool {
+		return iv[i].val < iv[j].val
+	})
+	ranks := make([]float64, n)
+	i := 0
+	for i < n {
+		j := i
+		for j < n && iv[j].val == iv[i].val {
+			j++
+		}
+		// Average rank for ties
+		avgRank := float64(i+j+1) / 2.0
+		for k := i; k < j; k++ {
+			ranks[iv[k].idx] = avgRank
+		}
+		i = j
+	}
+	return ranks
 }
 
 // ────────────────────────────────────────────────────────────

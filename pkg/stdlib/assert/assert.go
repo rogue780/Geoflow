@@ -34,6 +34,17 @@ func GetExports() map[string]object.Object {
 		"endsWith":       &object.Builtin{Name: "assert.endsWith", Fn: endsWith},
 		"matches":        &object.Builtin{Name: "assert.matches", Fn: matches},
 		"throws":         &object.Builtin{Name: "assert.throws", Fn: throws},
+		"doesNotThrow":   &object.Builtin{Name: "assert.doesNotThrow", Fn: doesNotThrow},
+		"same":           &object.Builtin{Name: "assert.same", Fn: same},
+		"containsAll":    &object.Builtin{Name: "assert.containsAll", Fn: containsAll},
+		"containsNone":   &object.Builtin{Name: "assert.containsNone", Fn: containsNone},
+		"blank":          &object.Builtin{Name: "assert.blank", Fn: blank},
+		"type":           &object.Builtin{Name: "assert.type", Fn: typeFn},
+		"instanceof":     &object.Builtin{Name: "assert.instanceof", Fn: typeFn},
+		"positive":       &object.Builtin{Name: "assert.positive", Fn: positive},
+		"negative":       &object.Builtin{Name: "assert.negative", Fn: negative},
+		"finite":         &object.Builtin{Name: "assert.finite", Fn: finiteFn},
+		"NaN":            &object.Builtin{Name: "assert.NaN", Fn: nanFn},
 	}
 }
 
@@ -426,10 +437,182 @@ func throws(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return &object.Error{Message: "assert.throws expects 1 argument"}
 	}
-	// Since we cannot call GeoFlow functions from Go without the evaluator,
-	// we check if the argument is already an Error object.
+	// If the argument is already an Error object, the assertion passes.
 	if args[0].Type() == object.ERROR_OBJ {
 		return object.NIL
 	}
+	// If it's callable, invoke it and check if the result is an error.
+	switch args[0].(type) {
+	case *object.Function, *object.Builtin, *object.ComposedFunction:
+		result := object.CallFunction(args[0])
+		if result.Type() == object.ERROR_OBJ {
+			return object.NIL
+		}
+		return fail(fmt.Sprintf("expected function to throw, but it returned %s (%s)", result.Inspect(), result.Type()))
+	}
 	return fail(fmt.Sprintf("expected an error, got %s (%s)", args[0].Inspect(), args[0].Type()))
+}
+
+func doesNotThrow(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.doesNotThrow expects 1 argument"}
+	}
+	// If the argument is already an Error object, the assertion fails.
+	if args[0].Type() == object.ERROR_OBJ {
+		return fail(fmt.Sprintf("expected no error, got %s", args[0].Inspect()))
+	}
+	// If it's callable, invoke it and check that the result is NOT an error.
+	switch args[0].(type) {
+	case *object.Function, *object.Builtin, *object.ComposedFunction:
+		result := object.CallFunction(args[0])
+		if result.Type() == object.ERROR_OBJ {
+			return fail(fmt.Sprintf("expected function not to throw, but it threw: %s", result.Inspect()))
+		}
+		return object.NIL
+	}
+	return object.NIL
+}
+
+func same(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "assert.same expects 2 arguments (a, b)"}
+	}
+	if args[0] == args[1] {
+		return object.NIL
+	}
+	return fail(fmt.Sprintf("expected same reference, got %s and %s", args[0].Inspect(), args[1].Inspect()))
+}
+
+func containsAll(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "assert.containsAll expects 2 arguments (list, items)"}
+	}
+	haystack, ok := args[0].(*object.List)
+	if !ok {
+		return &object.Error{Message: "assert.containsAll: first argument must be a list"}
+	}
+	needles, ok := args[1].(*object.List)
+	if !ok {
+		return &object.Error{Message: "assert.containsAll: second argument must be a list"}
+	}
+	for _, needle := range needles.Elements {
+		found := false
+		for _, elem := range haystack.Elements {
+			if objectsEqual(elem, needle) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fail(fmt.Sprintf("list does not contain %s", needle.Inspect()))
+		}
+	}
+	return object.NIL
+}
+
+func containsNone(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "assert.containsNone expects 2 arguments (list, items)"}
+	}
+	haystack, ok := args[0].(*object.List)
+	if !ok {
+		return &object.Error{Message: "assert.containsNone: first argument must be a list"}
+	}
+	needles, ok := args[1].(*object.List)
+	if !ok {
+		return &object.Error{Message: "assert.containsNone: second argument must be a list"}
+	}
+	for _, needle := range needles.Elements {
+		for _, elem := range haystack.Elements {
+			if objectsEqual(elem, needle) {
+				return fail(fmt.Sprintf("list unexpectedly contains %s", needle.Inspect()))
+			}
+		}
+	}
+	return object.NIL
+}
+
+func blank(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.blank expects 1 argument (string)"}
+	}
+	s, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "assert.blank: argument must be a string"}
+	}
+	if strings.TrimSpace(s.Value) != "" {
+		return fail(fmt.Sprintf("expected blank string, got %q", s.Value))
+	}
+	return object.NIL
+}
+
+func typeFn(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "assert.type expects 2 arguments (value, typeString)"}
+	}
+	expected, ok := args[1].(*object.String)
+	if !ok {
+		return &object.Error{Message: "assert.type: second argument must be a string"}
+	}
+	actual := string(args[0].Type())
+	if actual != expected.Value {
+		return fail(fmt.Sprintf("expected type %q, got %q", expected.Value, actual))
+	}
+	return object.NIL
+}
+
+func positive(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.positive expects 1 argument (number)"}
+	}
+	val, ok := toFloat64(args[0])
+	if !ok {
+		return &object.Error{Message: "assert.positive: argument must be numeric"}
+	}
+	if val <= 0 {
+		return fail(fmt.Sprintf("expected positive number, got %g", val))
+	}
+	return object.NIL
+}
+
+func negative(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.negative expects 1 argument (number)"}
+	}
+	val, ok := toFloat64(args[0])
+	if !ok {
+		return &object.Error{Message: "assert.negative: argument must be numeric"}
+	}
+	if val >= 0 {
+		return fail(fmt.Sprintf("expected negative number, got %g", val))
+	}
+	return object.NIL
+}
+
+func finiteFn(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.finite expects 1 argument (number)"}
+	}
+	val, ok := toFloat64(args[0])
+	if !ok {
+		return &object.Error{Message: "assert.finite: argument must be numeric"}
+	}
+	if math.IsInf(val, 0) || math.IsNaN(val) {
+		return fail(fmt.Sprintf("expected finite number, got %g", val))
+	}
+	return object.NIL
+}
+
+func nanFn(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "assert.NaN expects 1 argument (number)"}
+	}
+	f, ok := args[0].(*object.Float)
+	if !ok {
+		return fail(fmt.Sprintf("expected NaN, got %s (%s)", args[0].Inspect(), args[0].Type()))
+	}
+	if !math.IsNaN(f.Value) {
+		return fail(fmt.Sprintf("expected NaN, got %g", f.Value))
+	}
+	return object.NIL
 }

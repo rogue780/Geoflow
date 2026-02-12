@@ -21,8 +21,10 @@ func GetExports() map[string]object.Object {
 		"hours":    &object.Builtin{Name: "time.hours", Fn: hours},
 		"days":     &object.Builtin{Name: "time.days", Fn: days},
 		"millis":   &object.Builtin{Name: "time.millis", Fn: millis},
-		"since":    &object.Builtin{Name: "time.since", Fn: since},
-		"until":    &object.Builtin{Name: "time.until", Fn: until},
+		"since":          &object.Builtin{Name: "time.since", Fn: since},
+		"until":          &object.Builtin{Name: "time.until", Fn: until},
+		"fromUnixMillis": &object.Builtin{Name: "time.fromUnixMillis", Fn: fromUnixMillis},
+		"instant":        &object.Builtin{Name: "time.instant", Fn: instant},
 	}
 }
 
@@ -214,4 +216,27 @@ func until(args ...object.Object) object.Object {
 		return &object.Error{Message: "time.until: argument must be a DateTime"}
 	}
 	return &object.Duration{Value: time.Until(dt.Value)}
+}
+
+func fromUnixMillis(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "time.fromUnixMillis expects 1 argument (milliseconds)"}
+	}
+	var ms int64
+	switch v := args[0].(type) {
+	case *object.Integer:
+		ms = v.Value
+	case *object.Float:
+		ms = int64(v.Value)
+	default:
+		return &object.Error{Message: "time.fromUnixMillis: argument must be a number"}
+	}
+	return &object.DateTime{Value: time.UnixMilli(ms).UTC()}
+}
+
+func instant(args ...object.Object) object.Object {
+	if len(args) != 0 {
+		return &object.Error{Message: "time.instant expects 0 arguments"}
+	}
+	return &object.DateTime{Value: time.Now()}
 }

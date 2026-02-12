@@ -13,12 +13,14 @@ import (
 	geoio "github.com/rogue780/geoflow/pkg/geo/io"
 	"github.com/rogue780/geoflow/pkg/geo/raster"
 	"github.com/rogue780/geoflow/pkg/geo/s2"
+	"github.com/rogue780/geoflow/pkg/geo/transform"
 	gfassert "github.com/rogue780/geoflow/pkg/stdlib/assert"
 	"github.com/rogue780/geoflow/pkg/stdlib/collections"
 	"github.com/rogue780/geoflow/pkg/stdlib/core"
 	gfdata "github.com/rogue780/geoflow/pkg/stdlib/data"
 	gfio "github.com/rogue780/geoflow/pkg/stdlib/io"
 	gflog "github.com/rogue780/geoflow/pkg/stdlib/log"
+	gflinalg "github.com/rogue780/geoflow/pkg/stdlib/math/linalg"
 	gfnumeric "github.com/rogue780/geoflow/pkg/stdlib/math/numeric"
 	gfsymbolic "github.com/rogue780/geoflow/pkg/stdlib/math/symbolic"
 	gftime "github.com/rogue780/geoflow/pkg/stdlib/time"
@@ -91,6 +93,11 @@ var statsNames = map[string]bool{
 	"correlation": true, "covariance": true, "linreg": true,
 	"sem": true, "skewness": true, "kurtosis": true,
 	"iqr": true, "zscore": true, "movingMean": true,
+	"quartiles": true, "statRange": true, "product": true,
+	"weightedMean": true, "weightedVariance": true,
+	"spearman": true, "kendall": true, "autocorr": true,
+	"linearRegression": true, "minMaxScale": true,
+	"standardize": true, "movingStd": true, "ewma": true,
 }
 
 var linalgNames = map[string]bool{
@@ -157,6 +164,10 @@ func registerMathModules(r *ModuleRegistry) {
 			if linalgNames[k] {
 				exports[k] = v
 			}
+		}
+		// Add advanced linalg methods from the linalg package
+		for k, v := range gflinalg.GetExports() {
+			exports[k] = v
 		}
 		return &object.Module{Name: "linalg", Exports: exports}
 	})
@@ -347,5 +358,9 @@ func registerGeoModules(r *ModuleRegistry) {
 
 	r.Register("std.geo.analysis", func() *object.Module {
 		return &object.Module{Name: "analysis", Exports: analysis.GetExports()}
+	})
+
+	r.Register("std.geo.transform", func() *object.Module {
+		return &object.Module{Name: "transform", Exports: transform.GetExports()}
 	})
 }

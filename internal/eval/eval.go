@@ -4,12 +4,15 @@ package eval
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rogue780/geoflow/internal/ast"
 	"github.com/rogue780/geoflow/internal/object"
 	"github.com/rogue780/geoflow/internal/stdlib"
+	"github.com/rogue780/geoflow/pkg/geo/crs"
 )
 
 func init() {
@@ -1144,6 +1147,216 @@ func evalStringMethod(s *object.String, method string, env *object.Environment) 
 			}
 			return &object.String{Value: strings.Repeat(s.Value, int(n.Value))}
 		}}
+	case "titleCase":
+		return &object.Builtin{Name: "titleCase", Fn: func(args ...object.Object) object.Object {
+			words := strings.Fields(s.Value)
+			for i, w := range words {
+				if len(w) > 0 {
+					r := []rune(w)
+					r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+					words[i] = string(r)
+				}
+			}
+			return &object.String{Value: strings.Join(words, " ")}
+		}}
+	case "strip":
+		return &object.Builtin{Name: "strip", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("strip expects 1 argument (chars to trim)")
+			}
+			chars, ok := args[0].(*object.String)
+			if !ok {
+				return newError("strip: argument must be a string")
+			}
+			return &object.String{Value: strings.Trim(s.Value, chars.Value)}
+		}}
+	case "slice":
+		return &object.Builtin{Name: "slice", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("slice expects 2 arguments (start, end)")
+			}
+			start, ok1 := args[0].(*object.Integer)
+			end, ok2 := args[1].(*object.Integer)
+			if !ok1 || !ok2 {
+				return newError("slice arguments must be integers")
+			}
+			runes := []rune(s.Value)
+			n := len(runes)
+			st, en := int(start.Value), int(end.Value)
+			if st < 0 {
+				st = n + st
+			}
+			if en < 0 {
+				en = n + en
+			}
+			if st < 0 {
+				st = 0
+			}
+			if en > n {
+				en = n
+			}
+			if st > en {
+				return &object.String{Value: ""}
+			}
+			return &object.String{Value: string(runes[st:en])}
+		}}
+	case "insert":
+		return &object.Builtin{Name: "insert", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("insert expects 2 arguments (index, string)")
+			}
+			idx, ok1 := args[0].(*object.Integer)
+			ins, ok2 := args[1].(*object.String)
+			if !ok1 || !ok2 {
+				return newError("insert: first argument must be integer, second must be string")
+			}
+			runes := []rune(s.Value)
+			i := int(idx.Value)
+			if i < 0 {
+				i = 0
+			}
+			if i > len(runes) {
+				i = len(runes)
+			}
+			insRunes := []rune(ins.Value)
+			result := make([]rune, 0, len(runes)+len(insRunes))
+			result = append(result, runes[:i]...)
+			result = append(result, insRunes...)
+			result = append(result, runes[i:]...)
+			return &object.String{Value: string(result)}
+		}}
+	case "remove":
+		return &object.Builtin{Name: "remove", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("remove expects 2 arguments (start, end)")
+			}
+			start, ok1 := args[0].(*object.Integer)
+			end, ok2 := args[1].(*object.Integer)
+			if !ok1 || !ok2 {
+				return newError("remove arguments must be integers")
+			}
+			runes := []rune(s.Value)
+			n := len(runes)
+			st, en := int(start.Value), int(end.Value)
+			if st < 0 {
+				st = 0
+			}
+			if en > n {
+				en = n
+			}
+			if st > en {
+				return s
+			}
+			result := make([]rune, 0, n-(en-st))
+			result = append(result, runes[:st]...)
+			result = append(result, runes[en:]...)
+			return &object.String{Value: string(result)}
+		}}
+	case "matches":
+		return &object.Builtin{Name: "matches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("matches expects 1 argument (regex pattern)")
+			}
+			pattern, ok := args[0].(*object.String)
+			if !ok {
+				return newError("matches: argument must be a string")
+			}
+			re, err := regexp.Compile(pattern.Value)
+			if err != nil {
+				return newError("matches: invalid regex: %s", err.Error())
+			}
+			return object.NativeBoolToBooleanObject(re.MatchString(s.Value))
+		}}
+	case "findAll":
+		return &object.Builtin{Name: "findAll", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("findAll expects 1 argument (regex pattern)")
+			}
+			pattern, ok := args[0].(*object.String)
+			if !ok {
+				return newError("findAll: argument must be a string")
+			}
+			re, err := regexp.Compile(pattern.Value)
+			if err != nil {
+				return newError("findAll: invalid regex: %s", err.Error())
+			}
+			matches := re.FindAllString(s.Value, -1)
+			elems := make([]object.Object, len(matches))
+			for i, m := range matches {
+				elems[i] = &object.String{Value: m}
+			}
+			return &object.List{Elements: elems}
+		}}
+	case "replaceRegex":
+		return &object.Builtin{Name: "replaceRegex", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("replaceRegex expects 2 arguments (pattern, replacement)")
+			}
+			pattern, ok1 := args[0].(*object.String)
+			replacement, ok2 := args[1].(*object.String)
+			if !ok1 || !ok2 {
+				return newError("replaceRegex: arguments must be strings")
+			}
+			re, err := regexp.Compile(pattern.Value)
+			if err != nil {
+				return newError("replaceRegex: invalid regex: %s", err.Error())
+			}
+			return &object.String{Value: re.ReplaceAllString(s.Value, replacement.Value)}
+		}}
+	case "capture":
+		return &object.Builtin{Name: "capture", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("capture expects 1 argument (regex pattern)")
+			}
+			pattern, ok := args[0].(*object.String)
+			if !ok {
+				return newError("capture: argument must be a string")
+			}
+			re, err := regexp.Compile(pattern.Value)
+			if err != nil {
+				return newError("capture: invalid regex: %s", err.Error())
+			}
+			match := re.FindStringSubmatch(s.Value)
+			if match == nil {
+				return object.NONE
+			}
+			elems := make([]object.Object, len(match))
+			for i, m := range match {
+				elems[i] = &object.String{Value: m}
+			}
+			return &object.Option{Value: &object.List{Elements: elems}, IsSome: true}
+		}}
+	case "parseInt":
+		return &object.Builtin{Name: "parseInt", Fn: func(args ...object.Object) object.Object {
+			v, err := fmt.Sscanf(strings.TrimSpace(s.Value), "%d", new(int64))
+			if err != nil || v != 1 {
+				return &object.Result{Value: &object.String{Value: fmt.Sprintf("cannot parse '%s' as int", s.Value)}, IsOk: false}
+			}
+			var n int64
+			fmt.Sscanf(strings.TrimSpace(s.Value), "%d", &n)
+			return &object.Result{Value: &object.Integer{Value: n}, IsOk: true}
+		}}
+	case "parseFloat":
+		return &object.Builtin{Name: "parseFloat", Fn: func(args ...object.Object) object.Object {
+			var n float64
+			v, err := fmt.Sscanf(strings.TrimSpace(s.Value), "%g", &n)
+			if err != nil || v != 1 {
+				return &object.Result{Value: &object.String{Value: fmt.Sprintf("cannot parse '%s' as float", s.Value)}, IsOk: false}
+			}
+			return &object.Result{Value: &object.Float{Value: n}, IsOk: true}
+		}}
+	case "parseBool":
+		return &object.Builtin{Name: "parseBool", Fn: func(args ...object.Object) object.Object {
+			trimmed := strings.TrimSpace(strings.ToLower(s.Value))
+			switch trimmed {
+			case "true", "1", "yes":
+				return &object.Result{Value: object.TRUE_OBJ, IsOk: true}
+			case "false", "0", "no":
+				return &object.Result{Value: object.FALSE_OBJ, IsOk: true}
+			default:
+				return &object.Result{Value: &object.String{Value: fmt.Sprintf("cannot parse '%s' as bool", s.Value)}, IsOk: false}
+			}
+		}}
 	case "toInt":
 		return &object.Builtin{Name: "toInt", Fn: func(args ...object.Object) object.Object {
 			v, err := fmt.Sscanf(strings.TrimSpace(s.Value), "%d", new(int64))
@@ -2223,12 +2436,12 @@ func evalMapMethod(m *object.Map, method string, env *object.Environment) object
 		}}
 	case "merge":
 		return &object.Builtin{Name: "merge", Fn: func(args ...object.Object) object.Object {
-			if len(args) != 1 {
-				return newError("merge expects 1 argument (map)")
+			if len(args) < 1 || len(args) > 2 {
+				return newError("merge expects 1-2 arguments (map, resolver?)")
 			}
 			other, ok := args[0].(*object.Map)
 			if !ok {
-				return newError("merge: argument must be a Map")
+				return newError("merge: first argument must be a Map")
 			}
 			nm := &object.Map{}
 			nm.Pairs = append(nm.Pairs, m.Pairs...)
@@ -2240,7 +2453,15 @@ func evalMapMethod(m *object.Map, method string, env *object.Environment) object
 				found := false
 				for i, existing := range nm.Pairs {
 					if s, ok := existing.Key.(*object.String); ok && s.Value == keyStr {
-						nm.Pairs[i] = p
+						if len(args) == 2 {
+							resolved := applyFunction(args[1], []object.Object{existing.Value, p.Value}, env)
+							if isError(resolved) {
+								return resolved
+							}
+							nm.Pairs[i] = object.MapPair{Key: existing.Key, Value: resolved}
+						} else {
+							nm.Pairs[i] = p
+						}
 						found = true
 						break
 					}
@@ -2775,6 +2996,58 @@ func evalPointMethod(p *object.Point, method string) object.Object {
 		return object.NIL
 	case "hasZ":
 		return object.NativeBoolToBooleanObject(p.Coord.HasZ)
+	case "hasM":
+		return object.FALSE_OBJ
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.Point)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			return object.NativeBoolToBooleanObject(p.Coord.Equals(other.Coord))
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "covers":
+		return &object.Builtin{Name: "covers", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("covers expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(p, args[0]))
+		}}
+	case "coveredBy":
+		return &object.Builtin{Name: "coveredBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("coveredBy expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(args[0], p))
+		}}
 	case "toWKT":
 		return &object.Builtin{Name: "toWKT", Fn: func(args ...object.Object) object.Object {
 			return &object.String{Value: p.ToWKT()}
@@ -2867,11 +3140,16 @@ func evalPointMethod(p *object.Point, method string) object.Object {
 		}}
 	case "scale":
 		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
-			if len(args) != 1 {
-				return newError("scale expects 1 argument (factor)")
+			if len(args) == 1 {
+				f := toFloat64(args[0])
+				return &object.Point{Coord: object.Coordinate{X: p.Coord.X * f, Y: p.Coord.Y * f, Z: p.Coord.Z, HasZ: p.Coord.HasZ}, SRID: p.SRID}
 			}
-			f := toFloat64(args[0])
-			return &object.Point{Coord: object.Coordinate{X: p.Coord.X * f, Y: p.Coord.Y * f, Z: p.Coord.Z, HasZ: p.Coord.HasZ}, SRID: p.SRID}
+			if len(args) == 2 {
+				fx := toFloat64(args[0])
+				fy := toFloat64(args[1])
+				return &object.Point{Coord: object.Coordinate{X: p.Coord.X * fx, Y: p.Coord.Y * fy, Z: p.Coord.Z, HasZ: p.Coord.HasZ}, SRID: p.SRID}
+			}
+			return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
 		}}
 	case "rotate":
 		return &object.Builtin{Name: "rotate", Fn: func(args ...object.Object) object.Object {
@@ -2971,6 +3249,66 @@ func evalLineStringMethod(ls *object.LineString, method string) object.Object {
 		return object.NativeBoolToBooleanObject(lineStringIsSimple(ls.Coords))
 	case "dimension":
 		return &object.Integer{Value: 1}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.LineString)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			if len(ls.Coords) != len(other.Coords) {
+				return object.FALSE_OBJ
+			}
+			for i, c := range ls.Coords {
+				if !c.Equals(other.Coords[i]) {
+					return object.FALSE_OBJ
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "covers":
+		return &object.Builtin{Name: "covers", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("covers expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(ls, args[0]))
+		}}
+	case "coveredBy":
+		return &object.Builtin{Name: "coveredBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("coveredBy expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(args[0], ls))
+		}}
 	case "srid":
 		return &object.Integer{Value: int64(ls.SRID)}
 	case "setSRID":
@@ -3212,13 +3550,19 @@ func evalLineStringMethod(ls *object.LineString, method string) object.Object {
 		}}
 	case "scale":
 		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
-			if len(args) != 1 {
-				return newError("scale expects 1 argument (factor)")
+			var fx, fy float64
+			if len(args) == 1 {
+				fx = toFloat64(args[0])
+				fy = fx
+			} else if len(args) == 2 {
+				fx = toFloat64(args[0])
+				fy = toFloat64(args[1])
+			} else {
+				return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
 			}
-			f := toFloat64(args[0])
 			coords := make([]object.Coordinate, len(ls.Coords))
 			for i, c := range ls.Coords {
-				coords[i] = object.Coordinate{X: c.X * f, Y: c.Y * f, Z: c.Z, HasZ: c.HasZ}
+				coords[i] = object.Coordinate{X: c.X * fx, Y: c.Y * fy, Z: c.Z, HasZ: c.HasZ}
 			}
 			return &object.LineString{Coords: coords, SRID: ls.SRID}
 		}}
@@ -3303,6 +3647,81 @@ func evalPolygonMethod(p *object.Polygon, method string) object.Object {
 		return object.NativeBoolToBooleanObject(valid)
 	case "dimension":
 		return &object.Integer{Value: 2}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.Polygon)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			if len(p.ExteriorRing) != len(other.ExteriorRing) {
+				return object.FALSE_OBJ
+			}
+			for i, c := range p.ExteriorRing {
+				if !c.Equals(other.ExteriorRing[i]) {
+					return object.FALSE_OBJ
+				}
+			}
+			if len(p.InteriorRings) != len(other.InteriorRings) {
+				return object.FALSE_OBJ
+			}
+			for i, ring := range p.InteriorRings {
+				if len(ring) != len(other.InteriorRings[i]) {
+					return object.FALSE_OBJ
+				}
+				for j, c := range ring {
+					if !c.Equals(other.InteriorRings[i][j]) {
+						return object.FALSE_OBJ
+					}
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "covers":
+		return &object.Builtin{Name: "covers", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("covers expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(p, args[0]))
+		}}
+	case "coveredBy":
+		return &object.Builtin{Name: "coveredBy", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("coveredBy expects 1 argument (geometry)")
+			}
+			return object.NativeBoolToBooleanObject(stdlib.SpatialContains(args[0], p))
+		}}
 	case "srid":
 		return &object.Integer{Value: int64(p.SRID)}
 	case "setSRID":
@@ -3422,12 +3841,18 @@ func evalPolygonMethod(p *object.Polygon, method string) object.Object {
 		}}
 	case "scale":
 		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
-			if len(args) != 1 {
-				return newError("scale expects 1 argument (factor)")
+			var fx, fy float64
+			if len(args) == 1 {
+				fx = toFloat64(args[0])
+				fy = fx
+			} else if len(args) == 2 {
+				fx = toFloat64(args[0])
+				fy = toFloat64(args[1])
+			} else {
+				return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
 			}
-			f := toFloat64(args[0])
 			return transformPolygon(p, func(c object.Coordinate) object.Coordinate {
-				return object.Coordinate{X: c.X * f, Y: c.Y * f, Z: c.Z, HasZ: c.HasZ}
+				return object.Coordinate{X: c.X * fx, Y: c.Y * fy, Z: c.Z, HasZ: c.HasZ}
 			})
 		}}
 	case "rotate":
@@ -3491,6 +3916,99 @@ func evalMultiPointMethod(mp *object.MultiPoint, method string) object.Object {
 		return object.NativeBoolToBooleanObject(len(mp.Points) == 0)
 	case "dimension":
 		return &object.Integer{Value: 0}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.MultiPoint)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			if len(mp.Points) != len(other.Points) {
+				return object.FALSE_OBJ
+			}
+			for i, pt := range mp.Points {
+				if !pt.Coord.Equals(other.Points[i].Coord) {
+					return object.FALSE_OBJ
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "translate":
+		return &object.Builtin{Name: "translate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("translate expects 2 arguments (dx, dy)")
+			}
+			dx := toFloat64(args[0])
+			dy := toFloat64(args[1])
+			pts := make([]*object.Point, len(mp.Points))
+			for i, pt := range mp.Points {
+				pts[i] = &object.Point{Coord: object.Coordinate{X: pt.Coord.X + dx, Y: pt.Coord.Y + dy, Z: pt.Coord.Z, HasZ: pt.Coord.HasZ}, SRID: pt.SRID}
+			}
+			return &object.MultiPoint{Points: pts, SRID: mp.SRID}
+		}}
+	case "scale":
+		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
+			var fx, fy float64
+			if len(args) == 1 {
+				fx = toFloat64(args[0])
+				fy = fx
+			} else if len(args) == 2 {
+				fx = toFloat64(args[0])
+				fy = toFloat64(args[1])
+			} else {
+				return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
+			}
+			pts := make([]*object.Point, len(mp.Points))
+			for i, pt := range mp.Points {
+				pts[i] = &object.Point{Coord: object.Coordinate{X: pt.Coord.X * fx, Y: pt.Coord.Y * fy, Z: pt.Coord.Z, HasZ: pt.Coord.HasZ}, SRID: pt.SRID}
+			}
+			return &object.MultiPoint{Points: pts, SRID: mp.SRID}
+		}}
+	case "rotate":
+		return &object.Builtin{Name: "rotate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("rotate expects 1 argument (angle in radians)")
+			}
+			angle := toFloat64(args[0])
+			cosA := math.Cos(angle)
+			sinA := math.Sin(angle)
+			pts := make([]*object.Point, len(mp.Points))
+			for i, pt := range mp.Points {
+				pts[i] = &object.Point{Coord: object.Coordinate{X: pt.Coord.X*cosA - pt.Coord.Y*sinA, Y: pt.Coord.X*sinA + pt.Coord.Y*cosA, Z: pt.Coord.Z, HasZ: pt.Coord.HasZ}, SRID: pt.SRID}
+			}
+			return &object.MultiPoint{Points: pts, SRID: mp.SRID}
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
 	case "srid":
 		return &object.Integer{Value: int64(mp.SRID)}
 	case "setSRID":
@@ -3541,6 +4059,116 @@ func evalMultiLineStringMethod(ml *object.MultiLineString, method string) object
 		return object.NativeBoolToBooleanObject(len(ml.Lines) == 0)
 	case "dimension":
 		return &object.Integer{Value: 1}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.MultiLineString)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			if len(ml.Lines) != len(other.Lines) {
+				return object.FALSE_OBJ
+			}
+			for i, line := range ml.Lines {
+				if len(line.Coords) != len(other.Lines[i].Coords) {
+					return object.FALSE_OBJ
+				}
+				for j, c := range line.Coords {
+					if !c.Equals(other.Lines[i].Coords[j]) {
+						return object.FALSE_OBJ
+					}
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "translate":
+		return &object.Builtin{Name: "translate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("translate expects 2 arguments (dx, dy)")
+			}
+			dx := toFloat64(args[0])
+			dy := toFloat64(args[1])
+			lines := make([]*object.LineString, len(ml.Lines))
+			for i, l := range ml.Lines {
+				coords := make([]object.Coordinate, len(l.Coords))
+				for j, c := range l.Coords {
+					coords[j] = object.Coordinate{X: c.X + dx, Y: c.Y + dy, Z: c.Z, HasZ: c.HasZ}
+				}
+				lines[i] = &object.LineString{Coords: coords, SRID: l.SRID}
+			}
+			return &object.MultiLineString{Lines: lines, SRID: ml.SRID}
+		}}
+	case "scale":
+		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
+			var fx, fy float64
+			if len(args) == 1 {
+				fx = toFloat64(args[0])
+				fy = fx
+			} else if len(args) == 2 {
+				fx = toFloat64(args[0])
+				fy = toFloat64(args[1])
+			} else {
+				return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
+			}
+			lines := make([]*object.LineString, len(ml.Lines))
+			for i, l := range ml.Lines {
+				coords := make([]object.Coordinate, len(l.Coords))
+				for j, c := range l.Coords {
+					coords[j] = object.Coordinate{X: c.X * fx, Y: c.Y * fy, Z: c.Z, HasZ: c.HasZ}
+				}
+				lines[i] = &object.LineString{Coords: coords, SRID: l.SRID}
+			}
+			return &object.MultiLineString{Lines: lines, SRID: ml.SRID}
+		}}
+	case "rotate":
+		return &object.Builtin{Name: "rotate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("rotate expects 1 argument (angle in radians)")
+			}
+			angle := toFloat64(args[0])
+			cosA := math.Cos(angle)
+			sinA := math.Sin(angle)
+			lines := make([]*object.LineString, len(ml.Lines))
+			for i, l := range ml.Lines {
+				coords := make([]object.Coordinate, len(l.Coords))
+				for j, c := range l.Coords {
+					coords[j] = object.Coordinate{X: c.X*cosA - c.Y*sinA, Y: c.X*sinA + c.Y*cosA, Z: c.Z, HasZ: c.HasZ}
+				}
+				lines[i] = &object.LineString{Coords: coords, SRID: l.SRID}
+			}
+			return &object.MultiLineString{Lines: lines, SRID: ml.SRID}
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
 	case "srid":
 		return &object.Integer{Value: int64(ml.SRID)}
 	case "setSRID":
@@ -3593,6 +4221,111 @@ func evalMultiPolygonMethod(mp *object.MultiPolygon, method string) object.Objec
 		return object.NativeBoolToBooleanObject(len(mp.Polygons) == 0)
 	case "dimension":
 		return &object.Integer{Value: 2}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
+	case "equals":
+		return &object.Builtin{Name: "equals", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("equals expects 1 argument (geometry)")
+			}
+			other, ok := args[0].(*object.MultiPolygon)
+			if !ok {
+				return object.FALSE_OBJ
+			}
+			if len(mp.Polygons) != len(other.Polygons) {
+				return object.FALSE_OBJ
+			}
+			for i, poly := range mp.Polygons {
+				oPoly := other.Polygons[i]
+				if len(poly.ExteriorRing) != len(oPoly.ExteriorRing) {
+					return object.FALSE_OBJ
+				}
+				for j, c := range poly.ExteriorRing {
+					if !c.Equals(oPoly.ExteriorRing[j]) {
+						return object.FALSE_OBJ
+					}
+				}
+			}
+			return object.TRUE_OBJ
+		}}
+	case "translate":
+		return &object.Builtin{Name: "translate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("translate expects 2 arguments (dx, dy)")
+			}
+			dx := toFloat64(args[0])
+			dy := toFloat64(args[1])
+			polys := make([]*object.Polygon, len(mp.Polygons))
+			for i, p := range mp.Polygons {
+				polys[i] = transformPolygon(p, func(c object.Coordinate) object.Coordinate {
+					return object.Coordinate{X: c.X + dx, Y: c.Y + dy, Z: c.Z, HasZ: c.HasZ}
+				})
+			}
+			return &object.MultiPolygon{Polygons: polys, SRID: mp.SRID}
+		}}
+	case "scale":
+		return &object.Builtin{Name: "scale", Fn: func(args ...object.Object) object.Object {
+			var fx, fy float64
+			if len(args) == 1 {
+				fx = toFloat64(args[0])
+				fy = fx
+			} else if len(args) == 2 {
+				fx = toFloat64(args[0])
+				fy = toFloat64(args[1])
+			} else {
+				return newError("scale expects 1 or 2 arguments (factor) or (fx, fy)")
+			}
+			polys := make([]*object.Polygon, len(mp.Polygons))
+			for i, p := range mp.Polygons {
+				polys[i] = transformPolygon(p, func(c object.Coordinate) object.Coordinate {
+					return object.Coordinate{X: c.X * fx, Y: c.Y * fy, Z: c.Z, HasZ: c.HasZ}
+				})
+			}
+			return &object.MultiPolygon{Polygons: polys, SRID: mp.SRID}
+		}}
+	case "rotate":
+		return &object.Builtin{Name: "rotate", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("rotate expects 1 argument (angle in radians)")
+			}
+			angle := toFloat64(args[0])
+			cosA := math.Cos(angle)
+			sinA := math.Sin(angle)
+			polys := make([]*object.Polygon, len(mp.Polygons))
+			for i, p := range mp.Polygons {
+				polys[i] = transformPolygon(p, func(c object.Coordinate) object.Coordinate {
+					return object.Coordinate{X: c.X*cosA - c.Y*sinA, Y: c.X*sinA + c.Y*cosA, Z: c.Z, HasZ: c.HasZ}
+				})
+			}
+			return &object.MultiPolygon{Polygons: polys, SRID: mp.SRID}
+		}}
+	case "touches":
+		return &object.Builtin{Name: "touches", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("touches expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "crosses":
+		return &object.Builtin{Name: "crosses", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("crosses expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
+	case "overlaps":
+		return &object.Builtin{Name: "overlaps", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("overlaps expects 1 argument (geometry)")
+			}
+			return object.FALSE_OBJ
+		}}
 	case "srid":
 		return &object.Integer{Value: int64(mp.SRID)}
 	case "setSRID":
@@ -3648,6 +4381,35 @@ func evalGeometryCollectionMethod(gc *object.GeometryCollection, method string) 
 		return &object.String{Value: gc.GeomType()}
 	case "isEmpty":
 		return object.NativeBoolToBooleanObject(len(gc.Geometries) == 0)
+	case "dimension":
+		// Return the maximum dimension of contained geometries
+		maxDim := -1
+		for _, g := range gc.Geometries {
+			d := 0
+			switch g.(type) {
+			case *object.Point, *object.MultiPoint:
+				d = 0
+			case *object.LineString, *object.MultiLineString:
+				d = 1
+			case *object.Polygon, *object.MultiPolygon:
+				d = 2
+			}
+			if d > maxDim {
+				maxDim = d
+			}
+		}
+		if maxDim < 0 {
+			maxDim = 0
+		}
+		return &object.Integer{Value: int64(maxDim)}
+	case "coordinateDimension":
+		return &object.Integer{Value: 2}
+	case "isSimple":
+		return object.TRUE_OBJ
+	case "hasZ":
+		return object.FALSE_OBJ
+	case "hasM":
+		return object.FALSE_OBJ
 	case "bounds":
 		coords := gc.Coordinates()
 		if len(coords) == 0 {
@@ -4575,6 +5337,24 @@ func evalSetMethod(s *object.Set, method string, env *object.Environment) object
 
 // ── DateTime Methods ──
 
+// geoflowFormatToGo converts GeoFlow format patterns to Go time layout strings.
+func geoflowFormatToGo(format string) string {
+	switch format {
+	case "RFC3339":
+		return time.RFC3339
+	case "RFC822":
+		return time.RFC822
+	case "UnixDate":
+		return time.UnixDate
+	case "YYYY-MM-DD":
+		return "2006-01-02"
+	case "YYYY-MM-DD HH:mm:ss":
+		return "2006-01-02 15:04:05"
+	default:
+		return format
+	}
+}
+
 func evalDateTimeMethod(dt *object.DateTime, method string) object.Object {
 	switch method {
 	case "year":
@@ -4589,12 +5369,21 @@ func evalDateTimeMethod(dt *object.DateTime, method string) object.Object {
 		return &object.Integer{Value: int64(dt.Value.Minute())}
 	case "second":
 		return &object.Integer{Value: int64(dt.Value.Second())}
+	case "millisecond":
+		return &object.Integer{Value: int64(dt.Value.Nanosecond() / 1_000_000)}
 	case "dayOfWeek":
 		return &object.Integer{Value: int64(dt.Value.Weekday())}
 	case "dayOfYear":
 		return &object.Integer{Value: int64(dt.Value.YearDay())}
+	case "weekOfYear":
+		_, week := dt.Value.ISOWeek()
+		return &object.Integer{Value: int64(week)}
+	case "quarter":
+		return &object.Integer{Value: int64((dt.Value.Month()-1)/3 + 1)}
 	case "toUnix":
 		return &object.Integer{Value: dt.Value.Unix()}
+	case "toUnixMillis":
+		return &object.Integer{Value: dt.Value.UnixMilli()}
 	case "toISO8601":
 		return &object.Builtin{Name: "toISO8601", Fn: func(args ...object.Object) object.Object {
 			return &object.String{Value: dt.Value.Format("2006-01-02T15:04:05Z07:00")}
@@ -4608,8 +5397,103 @@ func evalDateTimeMethod(dt *object.DateTime, method string) object.Object {
 			if !ok {
 				return newError("format: argument must be a string")
 			}
-			return &object.String{Value: dt.Value.Format(pat.Value)}
+			goLayout := geoflowFormatToGo(pat.Value)
+			return &object.String{Value: dt.Value.Format(goLayout)}
 		}}
+	case "isBefore":
+		return &object.Builtin{Name: "isBefore", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("isBefore expects 1 argument (DateTime)")
+			}
+			other, ok := args[0].(*object.DateTime)
+			if !ok {
+				return newError("isBefore: argument must be a DateTime")
+			}
+			return object.NativeBoolToBooleanObject(dt.Value.Before(other.Value))
+		}}
+	case "isAfter":
+		return &object.Builtin{Name: "isAfter", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("isAfter expects 1 argument (DateTime)")
+			}
+			other, ok := args[0].(*object.DateTime)
+			if !ok {
+				return newError("isAfter: argument must be a DateTime")
+			}
+			return object.NativeBoolToBooleanObject(dt.Value.After(other.Value))
+		}}
+	case "isBetween":
+		return &object.Builtin{Name: "isBetween", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 2 {
+				return newError("isBetween expects 2 arguments (start, end DateTime)")
+			}
+			start, ok1 := args[0].(*object.DateTime)
+			end, ok2 := args[1].(*object.DateTime)
+			if !ok1 || !ok2 {
+				return newError("isBetween: arguments must be DateTime values")
+			}
+			after := dt.Value.After(start.Value) || dt.Value.Equal(start.Value)
+			before := dt.Value.Before(end.Value) || dt.Value.Equal(end.Value)
+			return object.NativeBoolToBooleanObject(after && before)
+		}}
+	case "withYear":
+		return &object.Builtin{Name: "withYear", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("withYear expects 1 argument (year)")
+			}
+			y, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("withYear: argument must be an integer")
+			}
+			t := time.Date(int(y.Value), dt.Value.Month(), dt.Value.Day(),
+				dt.Value.Hour(), dt.Value.Minute(), dt.Value.Second(),
+				dt.Value.Nanosecond(), dt.Value.Location())
+			return &object.DateTime{Value: t}
+		}}
+	case "withMonth":
+		return &object.Builtin{Name: "withMonth", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("withMonth expects 1 argument (month)")
+			}
+			m, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("withMonth: argument must be an integer")
+			}
+			t := time.Date(dt.Value.Year(), time.Month(m.Value), dt.Value.Day(),
+				dt.Value.Hour(), dt.Value.Minute(), dt.Value.Second(),
+				dt.Value.Nanosecond(), dt.Value.Location())
+			return &object.DateTime{Value: t}
+		}}
+	case "withDay":
+		return &object.Builtin{Name: "withDay", Fn: func(args ...object.Object) object.Object {
+			if len(args) != 1 {
+				return newError("withDay expects 1 argument (day)")
+			}
+			d, ok := args[0].(*object.Integer)
+			if !ok {
+				return newError("withDay: argument must be an integer")
+			}
+			t := time.Date(dt.Value.Year(), dt.Value.Month(), int(d.Value),
+				dt.Value.Hour(), dt.Value.Minute(), dt.Value.Second(),
+				dt.Value.Nanosecond(), dt.Value.Location())
+			return &object.DateTime{Value: t}
+		}}
+	case "startOfDay":
+		t := time.Date(dt.Value.Year(), dt.Value.Month(), dt.Value.Day(),
+			0, 0, 0, 0, dt.Value.Location())
+		return &object.DateTime{Value: t}
+	case "endOfDay":
+		t := time.Date(dt.Value.Year(), dt.Value.Month(), dt.Value.Day(),
+			23, 59, 59, 999999999, dt.Value.Location())
+		return &object.DateTime{Value: t}
+	case "startOfMonth":
+		t := time.Date(dt.Value.Year(), dt.Value.Month(), 1,
+			0, 0, 0, 0, dt.Value.Location())
+		return &object.DateTime{Value: t}
+	case "startOfYear":
+		t := time.Date(dt.Value.Year(), 1, 1,
+			0, 0, 0, 0, dt.Value.Location())
+		return &object.DateTime{Value: t}
 	default:
 		return newError("no method '%s' on DateTime", method)
 	}
@@ -4648,6 +5532,26 @@ func evalCRSMethod(c *object.CRS, method string) object.Object {
 		return object.NativeBoolToBooleanObject(c.IsProjected)
 	case "units":
 		return &object.String{Value: c.Units}
+	case "toProj4":
+		exports := crs.GetExports()
+		fn := exports["toProj4"].(*object.Builtin)
+		return fn.Fn(c)
+	case "toWKT":
+		exports := crs.GetExports()
+		fn := exports["toWKT"].(*object.Builtin)
+		return fn.Fn(c)
+	case "bounds":
+		exports := crs.GetExports()
+		fn := exports["bounds"].(*object.Builtin)
+		return fn.Fn(c)
+	case "datum":
+		exports := crs.GetExports()
+		fn := exports["datum"].(*object.Builtin)
+		return fn.Fn(c)
+	case "ellipsoid":
+		exports := crs.GetExports()
+		fn := exports["ellipsoid"].(*object.Builtin)
+		return fn.Fn(c)
 	default:
 		return newError("no method '%s' on CRS", method)
 	}

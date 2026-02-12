@@ -25,14 +25,24 @@ func GetExports() map[string]object.Object {
 		"listDir":      &object.Builtin{Name: "io.listDir", Fn: listDir},
 		"createDir":    &object.Builtin{Name: "io.createDir", Fn: createDir},
 		"createDirAll": &object.Builtin{Name: "io.createDirAll", Fn: createDirAll},
-		"removeFile":   &object.Builtin{Name: "io.removeFile", Fn: removeFile},
+		"removeFile":    &object.Builtin{Name: "io.removeFile", Fn: removeFile},
+		"removeDir":    &object.Builtin{Name: "io.removeDir", Fn: removeDir},
+		"removeDirAll": &object.Builtin{Name: "io.removeDirAll", Fn: removeDirAll},
 		"copy":         &object.Builtin{Name: "io.copy", Fn: copyFile},
 		"move":         &object.Builtin{Name: "io.move", Fn: moveFile},
+		"readBytes":    &object.Builtin{Name: "io.readBytes", Fn: readBytes},
+		"writeBytes":   &object.Builtin{Name: "io.writeBytes", Fn: writeBytes},
+		"modifiedTime": &object.Builtin{Name: "io.modifiedTime", Fn: modifiedTime},
 		"join":         &object.Builtin{Name: "io.join", Fn: joinPath},
 		"dirname":      &object.Builtin{Name: "io.dirname", Fn: dirname},
 		"basename":     &object.Builtin{Name: "io.basename", Fn: basename},
 		"extension":    &object.Builtin{Name: "io.extension", Fn: extension},
 		"absolute":     &object.Builtin{Name: "io.absolute", Fn: absolute},
+		"relative":     &object.Builtin{Name: "io.relative", Fn: relativePath},
+		"stdin":        &object.String{Value: "stdin"},
+		"stdout":       &object.String{Value: "stdout"},
+		"stderr":       &object.String{Value: "stderr"},
+		"readLine":     &object.Builtin{Name: "io.readLine", Fn: readLine},
 	}
 }
 
@@ -366,3 +376,124 @@ func absolute(args ...object.Object) object.Object {
 	}
 	return &object.String{Value: abs}
 }
+
+func removeDir(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "io.removeDir expects 1 argument (path)"}
+	}
+	path, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.removeDir: path must be a string"}
+	}
+	err := os.Remove(path.Value)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.removeDir: %s", err.Error()))
+	}
+	return okResult(object.NIL)
+}
+
+func removeDirAll(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "io.removeDirAll expects 1 argument (path)"}
+	}
+	path, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.removeDirAll: path must be a string"}
+	}
+	err := os.RemoveAll(path.Value)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.removeDirAll: %s", err.Error()))
+	}
+	return okResult(object.NIL)
+}
+
+func readBytes(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "io.readBytes expects 1 argument (path)"}
+	}
+	path, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.readBytes: path must be a string"}
+	}
+	data, err := os.ReadFile(path.Value)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.readBytes: %s", err.Error()))
+	}
+	elements := make([]object.Object, len(data))
+	for i, b := range data {
+		elements[i] = &object.Integer{Value: int64(b)}
+	}
+	return okResult(&object.List{Elements: elements})
+}
+
+func writeBytes(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "io.writeBytes expects 2 arguments (path, bytes)"}
+	}
+	path, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.writeBytes: path must be a string"}
+	}
+	list, ok := args[1].(*object.List)
+	if !ok {
+		return &object.Error{Message: "io.writeBytes: bytes must be a List of integers"}
+	}
+	data := make([]byte, len(list.Elements))
+	for i, elem := range list.Elements {
+		intVal, ok := elem.(*object.Integer)
+		if !ok {
+			return &object.Error{Message: fmt.Sprintf("io.writeBytes: element %d must be an integer", i)}
+		}
+		if intVal.Value < 0 || intVal.Value > 255 {
+			return &object.Error{Message: fmt.Sprintf("io.writeBytes: byte value %d out of range (0-255)", intVal.Value)}
+		}
+		data[i] = byte(intVal.Value)
+	}
+	err := os.WriteFile(path.Value, data, 0644)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.writeBytes: %s", err.Error()))
+	}
+	return okResult(object.NIL)
+}
+
+func modifiedTime(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return &object.Error{Message: "io.modifiedTime expects 1 argument (path)"}
+	}
+	path, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.modifiedTime: path must be a string"}
+	}
+	info, err := os.Stat(path.Value)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.modifiedTime: %s", err.Error()))
+	}
+	return okResult(&object.DateTime{Value: info.ModTime()})
+}
+
+func relativePath(args ...object.Object) object.Object {
+	if len(args) != 2 {
+		return &object.Error{Message: "io.relative expects 2 arguments (basepath, targetpath)"}
+	}
+	base, ok := args[0].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.relative: basepath must be a string"}
+	}
+	target, ok := args[1].(*object.String)
+	if !ok {
+		return &object.Error{Message: "io.relative: targetpath must be a string"}
+	}
+	rel, err := filepath.Rel(base.Value, target.Value)
+	if err != nil {
+		return errResult(fmt.Sprintf("io.relative: %s", err.Error()))
+	}
+	return okResult(&object.String{Value: rel})
+}
+
+func readLine(args ...object.Object) object.Object {
+	if len(args) != 0 {
+		return &object.Error{Message: "io.readLine expects 0 arguments"}
+	}
+	return &object.Error{Message: "io.readLine: stdin reading not supported in non-interactive mode"}
+}
+
