@@ -96,7 +96,7 @@ fn printf(fmt: string, args: ...auto) { ... }
 ---
 
 ## Task 3: Generic Type Instantiation
-Status: [ ]
+Status: [DONE]
 
 Spec: Sections 3.6, 4.2 — Generic functions with type parameters.
 
@@ -124,6 +124,14 @@ fn swap<A, B>(pair: Tuple<A, B>) -> Tuple<B, A> { ... }
 ### Files to modify
 - `internal/eval/eval_test.go` — tests verifying generics don't break anything
 - Possibly `internal/eval/eval.go` if any type checking is needed
+
+### Completed: 2026-02-11
+### Deviation: None — generics work correctly as documentation-only.
+- Type parameters are parsed and stored in AST but ignored at runtime, which is
+  correct behavior for a dynamically typed tree-walking interpreter.
+- Added `TestGenericFunctions` in eval_test.go (5 cases): identity<T>, multi-param
+  generics, higher-order generics, type-polymorphic calls, List<T> annotations.
+- No code changes needed — just verification tests.
 
 ---
 

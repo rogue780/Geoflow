@@ -718,6 +718,43 @@ first(10, 20, 30)`
 	testIntegerObject(t, evaluated, 10, input)
 }
 
+func TestGenericFunctions(t *testing.T) {
+	// Generic type parameters are parsed but ignored at runtime (dynamically typed)
+	intTests := []struct {
+		input    string
+		expected int64
+	}{
+		// Generic identity function
+		{`fn identity<T>(x: T) -> T { x }
+identity(42)`, 42},
+		// Generic function with multiple type params
+		{`fn first<A, B>(a: A, b: B) -> A { a }
+first(10, "hello")`, 10},
+		// Generic function works with different types
+		{`fn apply<T, U>(f: Fn<(T) -> U>, x: T) -> U { f(x) }
+apply(\x -> x * 2, 21)`, 42},
+	}
+
+	for _, tt := range intTests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+
+	// Generic function returning string
+	input := `fn identity<T>(x: T) -> T { x }
+identity("hello")`
+	evaluated := testEval(input)
+	if s, ok := evaluated.(*object.String); !ok || s.Value != "hello" {
+		t.Fatalf("expected string 'hello', got %T (%s)", evaluated, evaluated.Inspect())
+	}
+
+	// Type annotations with generics on parameters
+	input2 := `fn len2<T>(list: List<T>) -> int { len(list) }
+len2([1, 2, 3])`
+	evaluated2 := testEval(input2)
+	testIntegerObject(t, evaluated2, 3, input2)
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)
