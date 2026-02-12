@@ -813,6 +813,218 @@ df.shape()`, "(2, 2)"},
 	}
 }
 
+func TestSymbolicMath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Symbolic variable creation
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+x`, "x"},
+		// Symbolic arithmetic
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+let expr = sym.add(x, sym.num(1))
+expr`, "x + 1"},
+		// Symbolic differentiation (d/dx of x^2 = 2*x)
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+let expr = sym.pow(x, sym.num(2))
+sym.diff(expr, "x")`, "2*x"},
+		// Symbolic substitution and realize
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+let expr = sym.add(x, sym.num(3))
+expr.realize({"x": 5.0})`, "8.0"},
+		// Symbolic simplify (0 + x = x)
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+sym.simplify(sym.add(sym.num(0), x))`, "x"},
+		// Symbolic toString
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+let expr = sym.mul(sym.num(2), x)
+expr.toString()`, "2*x"},
+		// Expr infix operator overloading
+		{`import std.math.symbolic as sym
+let x = sym.var("x")
+let expr = x + sym.num(1)
+expr`, "x + 1"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+func TestNumericalMethods(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Bisection root finding: sqrt(2) ≈ 1.414...
+		{`import std.math.numeric as num
+let f = \x -> x * x - 2
+let root = num.bisect(f, 1.0, 2.0)
+root > 1.41 && root < 1.42`, "true"},
+		// Newton's method
+		{`import std.math.numeric as num
+let f = \x -> x * x - 4
+let root = num.newton(f, 3.0)
+root > 1.99 && root < 2.01`, "true"},
+		// Numerical differentiation
+		{`import std.math.numeric as num
+let f = \x -> x * x
+let deriv = num.diff(f, 3.0)
+deriv > 5.99 && deriv < 6.01`, "true"},
+		// Polynomial evaluation
+		{`import std.math.numeric as num
+num.polyval([1.0, 0.0, -1.0], 2.0)`, "3.0"},
+		// Linspace
+		{`import std.math.numeric as num
+let xs = num.linspace(0.0, 1.0, 3)
+len(xs)`, "3"},
+		// Arange
+		{`import std.math.numeric as num
+let xs = num.arange(0.0, 5.0, 1.0)
+len(xs)`, "5"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+func TestRasterOperations(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Raster empty construction
+		{`import std.geo.raster as raster
+let r = raster.empty(10, 10, {"minX": 0.0, "minY": 0.0, "maxX": 1.0, "maxY": 1.0})
+r`, "Raster(10x10)"},
+		// Raster from array
+		{`import std.geo.raster as raster
+let data = [1.0, 2.0, 3.0, 4.0]
+let r = raster.fromArray(data, 2, 2)
+r`, "Raster(2x2)"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+func TestH3S2Indexing(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// H3 index creation
+		{`import std.geo.h3 as h3
+let idx = h3.fromLatLon(37.7749, -122.4194, 5)
+h3.isValid(idx)`, "true"},
+		// H3 resolution
+		{`import std.geo.h3 as h3
+let idx = h3.fromLatLon(37.7749, -122.4194, 7)
+h3.resolution(idx)`, "7"},
+		// H3 kRing returns a list
+		{`import std.geo.h3 as h3
+let idx = h3.fromLatLon(37.7749, -122.4194, 5)
+let ring = h3.kRing(idx, 1)
+len(ring) > 0`, "true"},
+		// H3 distance is non-negative
+		{`import std.geo.h3 as h3
+let a = h3.fromLatLon(37.7749, -122.4194, 5)
+let b = h3.fromLatLon(37.8, -122.4, 5)
+h3.distance(a, b) >= 0`, "true"},
+		// S2 cell creation
+		{`import std.geo.s2 as s2
+let cell = s2.fromLatLon(37.7749, -122.4194, 10)
+s2.isValid(cell)`, "true"},
+		// S2 level
+		{`import std.geo.s2 as s2
+let cell = s2.fromLatLon(37.7749, -122.4194, 12)
+s2.level(cell)`, "12"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
+func TestSpatialAnalysis(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Nearest neighbor
+		{`import std.geo.analysis as analysis
+let target = #POINT(0 0)#
+let candidates = [#POINT(1 0)#, #POINT(0 2)#, #POINT(3 3)#]
+let nearest = analysis.nearestNeighbor(target, candidates)
+nearest`, "POINT (1 0)"},
+		// DBSCAN clustering returns a list
+		{`import std.geo.analysis as analysis
+let pts = [#POINT(0 0)#, #POINT(0.1 0.1)#, #POINT(5 5)#, #POINT(5.1 5.1)#]
+let clusters = analysis.dbscan(pts, 1.0, 1)
+len(clusters) >= 1`, "true"},
+		// K-means clustering
+		{`import std.geo.analysis as analysis
+let pts = [#POINT(0 0)#, #POINT(1 0)#, #POINT(10 10)#, #POINT(11 10)#]
+let clusters = analysis.kmeans(pts, 2)
+len(clusters)`, "2"},
+		// IDW interpolation
+		{`import std.geo.analysis as analysis
+let pts = [#POINT(0 0)#, #POINT(1 0)#, #POINT(0 1)#]
+let vals = [10.0, 20.0, 30.0]
+let target = #POINT(0.5 0.5)#
+let result = analysis.idw(pts, vals, target)
+result > 0`, "true"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)

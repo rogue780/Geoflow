@@ -53,6 +53,26 @@ type Object interface {
 	Inspect() string
 }
 
+// GlobalApplyFunction is a callback set by the evaluator so that stdlib packages
+// can invoke user-defined functions (lambdas, closures) without importing eval.
+// The evaluator registers applyFunction here during initialization.
+var GlobalApplyFunction func(fn Object, args []Object) Object
+
+// CallFunction invokes a callable object (Builtin, Function, ComposedFunction)
+// using the global apply function callback. Returns an error object if the
+// callback is not registered or the function is not callable.
+func CallFunction(fn Object, args ...Object) Object {
+	if b, ok := fn.(*Builtin); ok {
+		if b.Fn != nil {
+			return b.Fn(args...)
+		}
+	}
+	if GlobalApplyFunction != nil {
+		return GlobalApplyFunction(fn, args)
+	}
+	return &Error{Message: fmt.Sprintf("cannot call %s (evaluator not registered)", fn.Type())}
+}
+
 // Integer represents a 64-bit signed integer.
 type Integer struct {
 	Value int64

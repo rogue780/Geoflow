@@ -5,16 +5,22 @@ import (
 
 	"github.com/rogue780/geoflow/internal/object"
 	"github.com/rogue780/geoflow/internal/stdlib"
+	"github.com/rogue780/geoflow/pkg/geo/analysis"
 	"github.com/rogue780/geoflow/pkg/geo/crs"
 	"github.com/rogue780/geoflow/pkg/geo/geog"
+	"github.com/rogue780/geoflow/pkg/geo/h3"
 	"github.com/rogue780/geoflow/pkg/geo/index"
 	geoio "github.com/rogue780/geoflow/pkg/geo/io"
+	"github.com/rogue780/geoflow/pkg/geo/raster"
+	"github.com/rogue780/geoflow/pkg/geo/s2"
 	gfassert "github.com/rogue780/geoflow/pkg/stdlib/assert"
 	"github.com/rogue780/geoflow/pkg/stdlib/collections"
 	"github.com/rogue780/geoflow/pkg/stdlib/core"
 	gfdata "github.com/rogue780/geoflow/pkg/stdlib/data"
 	gfio "github.com/rogue780/geoflow/pkg/stdlib/io"
 	gflog "github.com/rogue780/geoflow/pkg/stdlib/log"
+	gfnumeric "github.com/rogue780/geoflow/pkg/stdlib/math/numeric"
+	gfsymbolic "github.com/rogue780/geoflow/pkg/stdlib/math/symbolic"
 	gftime "github.com/rogue780/geoflow/pkg/stdlib/time"
 )
 
@@ -107,6 +113,22 @@ var numericNames = map[string]bool{
 	"linspace": true, "arange": true,
 }
 
+var symbolicNames = map[string]bool{
+	"var": true, "const": true, "num": true,
+	"diff": true, "simplify": true, "expand": true,
+	"substitute": true, "realize": true, "toString": true,
+	"add": true, "sub": true, "mul": true, "div": true,
+	"pow": true, "neg": true, "sin": true, "cos": true,
+	"exp": true, "log": true, "sqrt": true,
+}
+
+var numericPkgNames = map[string]bool{
+	"bisect": true, "newton": true, "quad": true,
+	"diff": true, "polyfit": true, "polyval": true,
+	"interp1d": true, "minimize": true, "gradientDescent": true,
+	"linspace": true, "arange": true,
+}
+
 func registerMathModules(r *ModuleRegistry) {
 	r.Register("std.math", func() *object.Module {
 		all := stdlib.GetMathBuiltins()
@@ -151,6 +173,7 @@ func registerMathModules(r *ModuleRegistry) {
 	})
 
 	r.Register("std.math.numeric", func() *object.Module {
+		// Merge the old math builtins (linspace, arange) with the new numeric package
 		all := stdlib.GetMathBuiltins()
 		exports := make(map[string]object.Object)
 		for k, v := range all {
@@ -158,7 +181,15 @@ func registerMathModules(r *ModuleRegistry) {
 				exports[k] = v
 			}
 		}
+		// Add new numeric methods from the numeric package
+		for k, v := range gfnumeric.GetExports() {
+			exports[k] = v
+		}
 		return &object.Module{Name: "numeric", Exports: exports}
+	})
+
+	r.Register("std.math.symbolic", func() *object.Module {
+		return &object.Module{Name: "symbolic", Exports: gfsymbolic.GetExports()}
 	})
 }
 
@@ -300,5 +331,21 @@ func registerGeoModules(r *ModuleRegistry) {
 
 	r.Register("std.geo.geog", func() *object.Module {
 		return &object.Module{Name: "geog", Exports: geog.GetExports()}
+	})
+
+	r.Register("std.geo.raster", func() *object.Module {
+		return &object.Module{Name: "raster", Exports: raster.GetExports()}
+	})
+
+	r.Register("std.geo.h3", func() *object.Module {
+		return &object.Module{Name: "h3", Exports: h3.GetExports()}
+	})
+
+	r.Register("std.geo.s2", func() *object.Module {
+		return &object.Module{Name: "s2", Exports: s2.GetExports()}
+	})
+
+	r.Register("std.geo.analysis", func() *object.Module {
+		return &object.Module{Name: "analysis", Exports: analysis.GetExports()}
 	})
 }

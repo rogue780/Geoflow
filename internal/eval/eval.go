@@ -12,6 +12,13 @@ import (
 	"github.com/rogue780/geoflow/internal/stdlib"
 )
 
+func init() {
+	// Register the evaluator's applyFunction so stdlib packages can call user-defined functions.
+	object.GlobalApplyFunction = func(fn object.Object, args []object.Object) object.Object {
+		return applyFunction(fn, args, object.NewEnvironment())
+	}
+}
+
 // Eval evaluates an AST node in the given environment.
 func Eval(node ast.Node, env *object.Environment) object.Object {
 	switch node := node.(type) {
@@ -233,6 +240,8 @@ func evalMinusPrefixOperator(right object.Object) object.Object {
 		return &object.Vector{Elements: elems}
 	case *object.Complex:
 		return &object.Complex{Real: -obj.Real, Imag: -obj.Imag}
+	case *object.Expr:
+		return &object.Expr{Kind: object.ExprNeg, Arg: obj}
 	default:
 		return newError("unknown operator: -%s", right.Type())
 	}
@@ -259,6 +268,8 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 		return evalVectorInfixExpression(operator, left, right)
 	case left.Type() == object.COMPLEX_OBJ || right.Type() == object.COMPLEX_OBJ:
 		return evalComplexInfixExpression(operator, left, right)
+	case left.Type() == object.EXPR_OBJ || right.Type() == object.EXPR_OBJ:
+		return evalExprInfixExpression(operator, left, right)
 	case operator == "==":
 		return object.NativeBoolToBooleanObject(left == right)
 	case operator == "!=":
@@ -828,6 +839,8 @@ func evalDotExpression(node *ast.DotExpression, env *object.Environment) object.
 		return evalSeriesMethod(obj, node.Field, env)
 	case *object.DataFrame:
 		return evalDataFrameMethod(obj, node.Field, env)
+	case *object.Expr:
+		return evalExprMethod(obj, node.Field)
 	}
 
 	// Dot composition: f . g → ComposedFunction{Outer: f, Inner: g}
@@ -4011,6 +4024,133 @@ func numericToFloat(obj object.Object) (float64, bool) {
 		return float64(o.Value), true
 	default:
 		return 0, false
+	}
+}
+
+// ── Symbolic Expr operators ──
+
+// objToExpr converts an object.Object to *object.Expr, wrapping numbers as ExprNum.
+func objToExpr(o object.Object) *object.Expr {
+	switch v := o.(type) {
+	case *object.Expr:
+		return v
+	case *object.Integer:
+		return &object.Expr{Kind: object.ExprNum, Value: float64(v.Value)}
+	case *object.Float:
+		return &object.Expr{Kind: object.ExprNum, Value: v.Value}
+	default:
+		return nil
+	}
+}
+
+func evalExprInfixExpression(operator string, left, right object.Object) object.Object {
+	l := objToExpr(left)
+	r := objToExpr(right)
+	if l == nil || r == nil {
+		return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+	switch operator {
+	case "+":
+		return &object.Expr{Kind: object.ExprAdd, Left: l, Right: r}
+	case "-":
+		return &object.Expr{Kind: object.ExprSub, Left: l, Right: r}
+	case "*":
+		return &object.Expr{Kind: object.ExprMul, Left: l, Right: r}
+	case "/":
+		return &object.Expr{Kind: object.ExprDiv, Left: l, Right: r}
+	case "^":
+		return &object.Expr{Kind: object.ExprPow, Left: l, Right: r}
+	case "==":
+		return object.NativeBoolToBooleanObject(object.ExprEqual(l, r))
+	case "!=":
+		return object.NativeBoolToBooleanObject(!object.ExprEqual(l, r))
+	default:
+		return newError("unknown operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func evalExprMethod(expr *object.Expr, method string) object.Object {
+	switch method {
+	case "substitute":
+		return &object.Builtin{
+			Name: "Expr.substitute",
+			Fn: func(args ...object.Object) object.Object {
+				if len(args) != 2 {
+					return newError("Expr.substitute expects 2 arguments (varName, value)")
+				}
+				varName, ok := args[0].(*object.String)
+				if !ok {
+					return newError("Expr.substitute: first argument must be a string")
+				}
+				replacement := objToExpr(args[1])
+				if replacement == nil {
+					return newError("Expr.substitute: second argument must be Expr or numeric")
+				}
+				return object.ExprSubstitute(expr, varName.Value, replacement)
+			},
+		}
+	case "realize":
+		return &object.Builtin{
+			Name: "Expr.realize",
+			Fn: func(args ...object.Object) object.Object {
+				bindings := make(map[string]float64)
+				if len(args) == 1 {
+					m, ok := args[0].(*object.Map)
+					if !ok {
+						return newError("Expr.realize: argument must be a Map of bindings")
+					}
+					for _, pair := range m.Pairs {
+						key, ok := pair.Key.(*object.String)
+						if !ok {
+							return newError("Expr.realize: binding keys must be strings")
+						}
+						switch v := pair.Value.(type) {
+						case *object.Float:
+							bindings[key.Value] = v.Value
+						case *object.Integer:
+							bindings[key.Value] = float64(v.Value)
+						default:
+							return newError("Expr.realize: binding value for '%s' must be numeric", key.Value)
+						}
+					}
+				} else if len(args) != 0 {
+					return newError("Expr.realize expects 0-1 arguments")
+				}
+				result, err := object.ExprRealize(expr, bindings)
+				if err != nil {
+					return newError("Expr.realize: %s", err.Error())
+				}
+				return &object.Float{Value: result}
+			},
+		}
+	case "toString":
+		return &object.Builtin{
+			Name: "Expr.toString",
+			Fn: func(args ...object.Object) object.Object {
+				return &object.String{Value: expr.Inspect()}
+			},
+		}
+	case "isConstant":
+		return &object.Builtin{
+			Name: "Expr.isConstant",
+			Fn: func(args ...object.Object) object.Object {
+				return object.NativeBoolToBooleanObject(object.ExprIsConstant(expr))
+			},
+		}
+	case "freeSymbols":
+		return &object.Builtin{
+			Name: "Expr.freeSymbols",
+			Fn: func(args ...object.Object) object.Object {
+				syms := object.ExprFreeSymbols(expr)
+				elems := make([]object.Object, len(syms))
+				for i, s := range syms {
+					elems[i] = &object.String{Value: s}
+				}
+				return &object.List{Elements: elems}
+			},
+		}
+	default:
+		return newError("no method '%s' on Expr", method)
 	}
 }
 

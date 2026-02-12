@@ -14,5 +14,8 @@ func GetExports() map[string]object.Object {
 	for k, v := range GetWKBExports() {
 		exports[k] = v
 	}
+	for k, v := range GetGPXExports() {
+		exports[k] = v
+	}
 	return exports
 }
