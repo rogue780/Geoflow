@@ -588,7 +588,7 @@ func applyFunction(fn object.Object, args []object.Object, env *object.Environme
 		// Partial application: if fewer args than required params (that lack defaults), return closure
 		requiredParams := 0
 		for _, p := range fn.Parameters {
-			if p.Default == nil {
+			if p.Default == nil && !p.Variadic {
 				requiredParams++
 			}
 		}
@@ -663,6 +663,17 @@ func applyStructConstructor(sd *object.StructDef, args []object.Object) object.O
 func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Environment {
 	env := object.NewEnclosedEnvironment(fn.Env)
 	for i, param := range fn.Parameters {
+		if param.Variadic {
+			// Collect all remaining args into a List
+			var elements []object.Object
+			if i < len(args) {
+				elements = args[i:]
+			} else {
+				elements = []object.Object{}
+			}
+			env.Set(param.Name.Value, &object.List{Elements: elements}, false)
+			break
+		}
 		if i < len(args) {
 			env.Set(param.Name.Value, args[i], false)
 		} else if param.Default != nil {

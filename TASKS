@@ -1,0 +1,1671 @@
+# GeoFlow Implementation Tasks
+
+Tracks remaining work to reach full spec compliance.
+Mark tasks [DONE] when complete. Add deviation notes at the bottom of each task.
+
+---
+
+## Task 1: Default Parameters
+Status: [DONE]
+
+Spec: Section 4.2 — Functions may declare default values for parameters.
+
+```geoflow
+fn greet(name: string, greeting: string = "Hello") {
+    println("{greeting}, {name}!")
+}
+greet("Alice")              -- "Hello, Alice!"
+greet("Alice", "Hi")        -- "Hi, Alice!"
+
+fn buffer(geom, distance: float = 1.0, segments: int = 8) { ... }
+```
+
+### What exists
+- AST: `FunctionParameter.Default` field (Expression, optional) is parsed.
+- Parser: `parseFunctionParameters` handles `= defaultExpr` after param name.
+
+### What's missing
+- Evaluator: `applyFunction` does not fill in defaults when fewer args are provided.
+  When `len(args) < len(params)`, check each missing param for a `.Default` expression,
+  evaluate it, and bind it in the function's environment.
+- Lambda default params (if spec requires them — verify).
+- Tests covering: default used, default overridden, multiple defaults, defaults after non-defaults.
+
+### Files to modify
+- `internal/eval/eval.go` — `applyFunction`, `evalCallExpression`
+- `internal/eval/eval_test.go` — new tests
+- `examples/` — add example usage
+
+### Completed: 2026-02-11
+### Deviation: Feature was already fully implemented in both parser and evaluator.
+- `applyFunction` already counts `requiredParams` (params without defaults) for
+  partial application decisions.
+- `extendFunctionEnv` already evaluates `param.Default` for missing args.
+- Lambdas use `[]*ast.Identifier` (not `FunctionParameter`), so they correctly
+  don't support defaults — consistent with spec.
+- Added tests: `TestDefaultParameters` in eval_test.go (8 cases), `TestDefaultParameters`
+  in parser_test.go. Extended `examples/functions.gf` with multiple defaults and
+  partial application examples. No code changes were needed.
+
+---
+
+## Task 2: Variadic Functions
+Status: [DONE]
+
+Spec: Section 4.2 — Last parameter may be variadic with `...` prefix.
+
+```geoflow
+fn sum(numbers: ...int) -> int {
+    numbers.reduce(0, \acc, n -> acc + n)
+}
+sum(1, 2, 3)        -- 6
+sum(1)               -- 1
+
+fn printf(fmt: string, args: ...auto) { ... }
+```
+
+### What exists
+- AST: `FunctionParameter.Variadic` bool field exists.
+- Parser: `parseFunctionParameters` handles `...` before param name.
+- Token: `ELLIPSIS` token type exists.
+
+### What's missing
+- Evaluator: `applyFunction` does not collect excess arguments into a List for
+  the variadic parameter. When the last param is variadic, gather all remaining
+  args into `&object.List{Elements: remainingArgs}` and bind it.
+- Interaction with default parameters (variadic must be last).
+- Tests: zero variadic args, multiple variadic args, variadic with preceding required params.
+
+### Files to modify
+- `internal/eval/eval.go` — `applyFunction`
+- `internal/eval/eval_test.go` — new tests
+- `examples/` — add example usage
+
+### Completed: 2026-02-11
+### Deviation: None — implementation matches spec.
+- Modified `applyFunction`: variadic params excluded from `requiredParams` count.
+- Modified `extendFunctionEnv`: when a param has `Variadic: true`, all remaining
+  args are collected into `&object.List{Elements: remainingArgs}`. Zero variadic
+  args produce an empty list.
+- Works with preceding required params and default params.
+- Added tests: `TestVariadicFunctions` in eval_test.go (9 cases including zero
+  args, single arg, multiple args, with required params, with defaults).
+  `TestVariadicParameters` and `TestVariadicWithRequiredParams` in parser_test.go.
+- Extended `examples/functions.gf` with variadic examples.
+
+---
+
+## Task 3: Generic Type Instantiation
+Status: [ ]
+
+Spec: Sections 3.6, 4.2 — Generic functions with type parameters.
+
+```geoflow
+fn identity<T>(x: T) -> T { x }
+fn map<T, U>(list: List<T>, f: Fn<(T) -> U>) -> List<U> { ... }
+fn swap<A, B>(pair: Tuple<A, B>) -> Tuple<B, A> { ... }
+```
+
+### What exists
+- AST: `FunctionLiteral.TypeParams []string` field.
+- Parser: `parseTypeParamList` parses `<T, U>` after function name.
+- AST: `TypeAnnotation` with `TypeParams` for `List<T>`, `Map<K, V>`, etc.
+
+### What's missing
+- Evaluator: Type parameters are parsed but completely ignored at runtime.
+  GeoFlow is dynamically typed at runtime (tree-walking interpreter), so generic
+  type params serve as documentation/future static checking. Verify that:
+  1. Functions with type params work correctly (params are simply ignored).
+  2. Type annotations with generics don't cause errors.
+  3. No runtime type checking is attempted (spec says `auto` for inference).
+- If the spec intends runtime type checking, implement basic validation.
+- Tests: generic function definitions, calling them with various types.
+
+### Files to modify
+- `internal/eval/eval_test.go` — tests verifying generics don't break anything
+- Possibly `internal/eval/eval.go` if any type checking is needed
+
+---
+
+## Task 4: Data Structures (std.data)
+Status: [ ]
+
+Spec: Section 6.4 — Array, Series, and DataFrame types.
+
+### 4a. Array Type
+
+Fixed-size, multidimensional arrays with numeric operations.
+
+```geoflow
+-- Construction
+Array.zeros(shape: List<int>) -> Array<float>
+Array.ones(shape: List<int>) -> Array<float>
+Array.full(shape: List<int>, value: T) -> Array<T>
+Array.eye(n: int) -> Array<float>
+Array.linspace(start: float, stop: float, n: int) -> Array<float>
+Array.logspace(start: float, stop: float, n: int) -> Array<float>
+Array.arange(start: float, stop: float, step: float = 1.0) -> Array<float>
+Array.fromList(data: List<T>) -> Array<T>
+Array.fromNested(data: List<List<T>>) -> Array<T>  -- 2D
+
+-- Properties
+arr.shape() -> List<int>
+arr.ndim() -> int
+arr.size() -> int
+arr.dtype() -> string
+
+-- Reshaping
+arr.reshape(shape: List<int>) -> Array<T>
+arr.flatten() -> Array<T>
+arr.transpose() -> Array<T>
+arr.T -> Array<T>               -- alias for transpose
+
+-- Element-wise operations
+arr + arr, arr - arr, arr * arr, arr / arr, arr ^ arr
+arr + scalar, scalar * arr, etc.
+
+-- Aggregation
+arr.sum(axis: Option<int> = None) -> Array<T> | T
+arr.mean(axis: Option<int> = None) -> Array<float> | float
+arr.min(axis: Option<int> = None) -> Array<T> | T
+arr.max(axis: Option<int> = None) -> Array<T> | T
+arr.std(axis: Option<int> = None) -> Array<float> | float
+arr.argmin(axis: Option<int> = None) -> Array<int> | int
+arr.argmax(axis: Option<int> = None) -> Array<int> | int
+
+-- Indexing
+arr[i]                     -- single element or slice
+arr[i, j]                  -- 2D indexing
+arr[1:3]                   -- slicing
+arr[arr > 0]               -- boolean indexing
+
+-- Comparison (element-wise, returns Array<bool>)
+arr > scalar, arr == scalar, etc.
+
+-- Math functions (element-wise)
+arr.abs(), arr.sqrt(), arr.sin(), arr.cos(), arr.exp(), arr.log()
+
+-- Dot product / matrix multiply
+arr.dot(other: Array<T>) -> Array<T>
+arr.matmul(other: Array<T>) -> Array<T>
+
+-- Stacking
+Array.hstack(arrays: List<Array<T>>) -> Array<T>
+Array.vstack(arrays: List<Array<T>>) -> Array<T>
+Array.concatenate(arrays: List<Array<T>>, axis: int = 0) -> Array<T>
+```
+
+### 4b. Series Type
+
+Labeled 1D array for statistical data.
+
+```geoflow
+-- Construction
+Series.new(data: List<T>, name: string = "") -> Series<T>
+Series.new(data: List<T>, index: List<string>, name: string = "") -> Series<T>
+Series.fromMap(data: Map<string, T>) -> Series<T>
+
+-- Properties
+s.name -> string
+s.length() -> int
+s.index() -> List<string>
+s.values() -> List<T>
+s.dtype() -> string
+
+-- Access
+s[i: int] -> T
+s[label: string] -> T
+s[start:end] -> Series<T>
+s.head(n: int = 5) -> Series<T>
+s.tail(n: int = 5) -> Series<T>
+
+-- Statistics
+s.sum(), s.mean(), s.median(), s.std(), s.var()
+s.min(), s.max(), s.count(), s.describe()
+s.quantile(q: float), s.corr(other: Series<float>)
+
+-- Transformation
+s.map(f: Fn<(T) -> U>) -> Series<U>
+s.filter(pred: Fn<(T) -> bool>) -> Series<T>
+s.sort() -> Series<T>
+s.sortBy(f: Fn<(T) -> K>) -> Series<T>
+s.rank() -> Series<float>
+s.cumsum() -> Series<T>
+s.diff(periods: int = 1) -> Series<T>
+s.shift(periods: int) -> Series<T>
+s.rolling(window: int) -> RollingWindow<T>
+s.fillNil(value: T) -> Series<T>
+s.dropNil() -> Series<T>
+s.unique() -> Series<T>
+s.valueCounts() -> Series<int>
+
+-- String accessor (when T = string)
+s.str.uppercase() -> Series<string>
+s.str.lowercase() -> Series<string>
+s.str.contains(pattern: string) -> Series<bool>
+s.str.replace(old: string, new: string) -> Series<string>
+s.str.split(sep: string) -> Series<List<string>>
+s.str.strip() -> Series<string>
+s.str.length() -> Series<int>
+
+-- DateTime accessor (when T = DateTime)
+s.dt.year() -> Series<int>
+s.dt.month() -> Series<int>
+s.dt.day() -> Series<int>
+s.dt.hour() -> Series<int>
+s.dt.dayOfWeek() -> Series<int>
+```
+
+### 4c. DataFrame Type
+
+Tabular data structure (collection of named Series).
+
+```geoflow
+-- Construction
+DataFrame.new(columns: Map<string, List<auto>>) -> DataFrame
+DataFrame.fromRows(rows: List<Map<string, auto>>) -> DataFrame
+DataFrame.fromCSV(path: string, options: CSVOptions = {}) -> Result<DataFrame, IOError>
+DataFrame.fromJSON(path: string) -> Result<DataFrame, IOError>
+
+-- Properties
+df.shape() -> Tuple<int, int>
+df.columns() -> List<string>
+df.dtypes() -> Map<string, string>
+df.length() -> int
+
+-- Access
+df[colName: string] -> Series<auto>
+df[[col1, col2]] -> DataFrame
+df.row(i: int) -> Map<string, auto>
+df.head(n: int = 5) -> DataFrame
+df.tail(n: int = 5) -> DataFrame
+
+-- Selection & Filtering
+df.select(columns: ...string) -> DataFrame
+df.drop(columns: ...string) -> DataFrame
+df.filter(pred: Fn<(Row) -> bool>) -> DataFrame
+df.where(column: string, pred: Fn<(auto) -> bool>) -> DataFrame
+df.sample(n: int) -> DataFrame
+df.distinct() -> DataFrame
+df.distinct(columns: ...string) -> DataFrame
+
+-- Sorting
+df.sort(column: string, ascending: bool = true) -> DataFrame
+df.sortBy(columns: List<Tuple<string, bool>>) -> DataFrame
+
+-- Transformation
+df.withColumn(name: string, expr: Fn<(Row) -> auto>) -> DataFrame
+df.rename(mapping: Map<string, string>) -> DataFrame
+df.cast(column: string, dtype: string) -> DataFrame
+df.map(f: Fn<(Row) -> Row>) -> DataFrame
+df.apply(column: string, f: Fn<(auto) -> auto>) -> DataFrame
+
+-- Aggregation
+df.groupBy(columns: ...string) -> GroupedDataFrame
+grouped.agg(specs: Map<string, string>) -> DataFrame
+grouped.count() -> DataFrame
+grouped.sum(columns: ...string) -> DataFrame
+grouped.mean(columns: ...string) -> DataFrame
+grouped.min(columns: ...string) -> DataFrame
+grouped.max(columns: ...string) -> DataFrame
+
+-- Joins
+df.join(other: DataFrame, on: string, how: string = "inner") -> DataFrame
+df.join(other: DataFrame, left: string, right: string, how: string = "inner") -> DataFrame
+-- how: "inner", "left", "right", "outer", "cross"
+
+-- Reshaping
+df.pivot(index: string, columns: string, values: string) -> DataFrame
+df.melt(idVars: List<string>, valueVars: List<string>) -> DataFrame
+df.stack() -> DataFrame
+df.unstack() -> DataFrame
+
+-- I/O
+df.toCSV(path: string, options: CSVOptions = {}) -> Result<unit, IOError>
+df.toJSON(path: string) -> Result<unit, IOError>
+df.describe() -> DataFrame
+df.toString() -> string
+```
+
+### Files to create/modify
+- `internal/object/object.go` — new Array, Series, DataFrame object types
+- `pkg/stdlib/data/` — new package with `GetExports()`
+- `internal/eval/modules.go` — register `std.data`
+- `internal/eval/eval.go` — handle new types in dot expressions, infix, etc.
+- Tests and examples
+
+---
+
+## Task 5: Symbolic Math (std.math.symbolic) + Numerical Methods (std.math.numeric)
+Status: [ ]
+
+Spec: Sections 7.3, 7.5 — These are combined because symbolic expressions need
+numeric realization, and numeric methods may consume symbolic expressions.
+
+### 5a. Symbolic Math (std.math.symbolic)
+
+```geoflow
+-- Symbolic variable/constant construction
+sym.var(name: string) -> Expr
+sym.const(name: string, value: float) -> Expr
+
+-- Expression arithmetic (operator overloading on Expr)
+expr + expr, expr - expr, expr * expr, expr / expr, expr ^ expr
+expr + float, float * expr, etc.
+
+-- Build functions from expressions
+sym.fn(params: List<string>, body: Expr) -> Fn
+
+-- Differentiation
+sym.diff(expr: Expr, var: string) -> Expr
+sym.diff(expr: Expr, var: string, n: int) -> Expr         -- nth derivative
+sym.gradient(expr: Expr, vars: List<string>) -> List<Expr>
+sym.jacobian(exprs: List<Expr>, vars: List<string>) -> Matrix<Expr>
+sym.hessian(expr: Expr, vars: List<string>) -> Matrix<Expr>
+
+-- Integration
+sym.integrate(expr: Expr, var: string) -> Expr             -- indefinite
+sym.integrate(expr: Expr, var: string, a: Expr, b: Expr) -> Expr  -- definite
+sym.doubleIntegrate(expr: Expr, var1: string, a1: Expr, b1: Expr,
+                    var2: string, a2: Expr, b2: Expr) -> Expr
+sym.tripleIntegrate(...) -> Expr
+
+-- Limits
+sym.limit(expr: Expr, var: string, point: Expr) -> Expr
+sym.limit(expr: Expr, var: string, point: Expr, direction: string) -> Expr
+
+-- Series expansion
+sym.taylor(expr: Expr, var: string, point: Expr, order: int) -> Expr
+sym.maclaurin(expr: Expr, var: string, order: int) -> Expr
+
+-- Simplification
+sym.simplify(expr: Expr) -> Expr
+sym.expand(expr: Expr) -> Expr
+sym.factor(expr: Expr) -> Expr
+sym.collect(expr: Expr, var: string) -> Expr
+sym.cancel(expr: Expr) -> Expr
+sym.trigSimplify(expr: Expr) -> Expr
+sym.rationalize(expr: Expr) -> Expr
+
+-- Solving
+sym.solve(equation: Expr, var: string) -> List<Expr>
+sym.solve(equations: List<Expr>, vars: List<string>) -> List<Map<string, Expr>>
+sym.roots(polynomial: Expr, var: string) -> List<Expr>
+sym.dsolve(ode: Expr, func: string, var: string) -> Expr
+
+-- Substitution
+expr.substitute(var: string, value: Expr) -> Expr
+expr.substitute(bindings: Map<string, Expr>) -> Expr
+
+-- Realization (symbolic -> numeric)
+expr.realize(bindings: Map<string, float>) -> float
+expr.realize() -> float                -- if fully numeric
+
+-- Conversion
+expr.toString() -> string
+expr.toLatex() -> string
+expr.toMathML() -> string
+expr.toFunction(params: List<string>) -> Fn
+
+-- Properties
+expr.isPolynomial() -> bool
+expr.degree(var: string) -> int
+expr.coefficients(var: string) -> List<Expr>
+expr.freeSymbols() -> List<string>
+expr.isConstant() -> bool
+```
+
+### 5b. Numerical Methods (std.math.numeric)
+
+```geoflow
+-- Root finding
+num.bisect(f: Fn, a: float, b: float, tol: float = 1e-12) -> float
+num.newton(f: Fn, x0: float, tol: float = 1e-12) -> float
+num.secant(f: Fn, x0: float, x1: float, tol: float = 1e-12) -> float
+num.brent(f: Fn, a: float, b: float, tol: float = 1e-12) -> float
+num.findRoots(f: Fn, interval: Tuple<float, float>, n: int = 100) -> List<float>
+
+-- Optimization
+num.minimize(f: Fn, bounds: Tuple<float, float>) -> OptResult
+num.maximize(f: Fn, bounds: Tuple<float, float>) -> OptResult
+num.gradientDescent(f: Fn, x0: List<float>, lr: float = 0.01, maxIter: int = 1000) -> List<float>
+
+type OptResult = struct {
+    x: float,
+    fx: float,
+    iterations: int,
+    converged: bool
+}
+
+-- Numerical integration (quadrature)
+num.quad(f: Fn, a: float, b: float) -> Tuple<float, float>  -- (result, error)
+num.quadGauss(f: Fn, a: float, b: float, n: int = 5) -> float
+num.romberg(f: Fn, a: float, b: float, tol: float = 1e-8) -> float
+num.dblquad(f: Fn, ax: float, bx: float, ay: Fn, by: Fn) -> float
+num.tplquad(...) -> float
+
+-- Numerical differentiation
+num.diff(f: Fn, x: float, h: float = 1e-8) -> float
+num.diff2(f: Fn, x: float, h: float = 1e-5) -> float
+num.gradient(f: Fn, x: List<float>) -> List<float>
+num.jacobian(fs: List<Fn>, x: List<float>) -> Matrix<float>
+num.hessian(f: Fn, x: List<float>) -> Matrix<float>
+
+-- Interpolation
+num.interp1d(xs: List<float>, ys: List<float>, kind: string = "linear") -> Fn
+num.interp2d(xs: List<float>, ys: List<float>, zs: Matrix<float>) -> Fn
+num.spline(xs: List<float>, ys: List<float>) -> Fn
+
+-- Curve fitting
+num.polyfit(xs: List<float>, ys: List<float>, degree: int) -> List<float>
+num.polyval(coeffs: List<float>, x: float) -> float
+num.fit(f: Fn, xs: List<float>, ys: List<float>, p0: List<float>) -> FitResult
+
+-- ODE solvers
+num.odeint(f: Fn, y0: List<float>, t: List<float>) -> List<List<float>>
+num.rk45(f: Fn, y0: List<float>, tSpan: Tuple<float, float>, options: ODEOptions = {}) -> ODESolution
+
+-- FFT
+num.fft(data: List<float>) -> List<Complex>
+num.ifft(data: List<Complex>) -> List<float>
+num.rfft(data: List<float>) -> List<Complex>
+num.irfft(data: List<Complex>) -> List<float>
+num.fftfreq(n: int, d: float = 1.0) -> List<float>
+```
+
+### Files to create/modify
+- `internal/object/object.go` — `Expr` object type for symbolic expressions
+- `pkg/stdlib/math/symbolic/` — symbolic math package
+- `pkg/stdlib/math/numeric/` — numerical methods package
+- `internal/eval/modules.go` — register `std.math.symbolic`, `std.math.numeric`
+- `internal/eval/eval.go` — operator overloading for Expr type
+- Tests and examples
+
+---
+
+## Task 6: Raster Operations (std.geo.raster)
+Status: [ ]
+
+Spec: Section 8.8
+
+```geoflow
+-- Types
+Raster<T>           -- single-band raster
+RasterStack<T>      -- multi-band raster
+Cell<T>             -- raster cell/pixel
+
+-- Construction
+Raster.fromFile(path: string) -> Result<Raster<float>, IOError>
+Raster.empty(width: int, height: int, bounds: BBox, value: T = 0) -> Raster<T>
+Raster.fromArray(data: Array<T>, bounds: BBox, crs: CRS) -> Raster<T>
+RasterStack.fromBands(bands: List<Raster<T>>) -> RasterStack<T>
+
+-- Properties
+r.width() -> int
+r.height() -> int
+r.bounds() -> BBox
+r.crs() -> CRS
+r.cellSize() -> Tuple<float, float>
+r.nodata() -> Option<T>
+r.band(n: int) -> Raster<T>        -- for RasterStack
+r.numBands() -> int
+
+-- Pixel access
+r.valueAt(x: float, y: float) -> Option<T>
+r.valueAtCell(row: int, col: int) -> T
+r.cellAt(x: float, y: float) -> Option<Cell<T>>
+
+-- Raster algebra (element-wise)
+r + r, r - r, r * r, r / r
+r + scalar, scalar * r, etc.
+r.apply(f: Fn<(T) -> U>) -> Raster<U>
+
+-- Resampling & reprojection
+r.resample(cellSize: float, method: string = "bilinear") -> Raster<T>
+r.reproject(targetCRS: CRS, method: string = "bilinear") -> Raster<T>
+r.crop(bounds: BBox) -> Raster<T>
+r.mask(geometry: geom.Geometry) -> Raster<T>
+
+-- Focal operations
+r.focal(window: int, f: Fn<(List<T>) -> T>) -> Raster<T>
+r.focalMean(window: int) -> Raster<float>
+r.focalMax(window: int) -> Raster<T>
+r.focalMin(window: int) -> Raster<T>
+r.convolve(kernel: Matrix<float>) -> Raster<float>
+
+-- Terrain analysis
+r.slope() -> Raster<float>                 -- degrees
+r.aspect() -> Raster<float>                -- degrees from north
+r.hillshade(azimuth: float = 315, altitude: float = 45) -> Raster<float>
+r.contours(interval: float) -> List<geom.LineString>
+r.flowDirection() -> Raster<int>
+r.flowAccumulation() -> Raster<int>
+r.watershed(pourPoint: geom.Point) -> Raster<int>
+r.viewshed(observerPoint: geom.Point, observerHeight: float = 1.7) -> Raster<bool>
+
+-- Zonal statistics
+r.zonalStats(zones: Raster<int>) -> Map<int, ZonalResult>
+r.zonalStats(zones: List<geom.Polygon>) -> List<ZonalResult>
+
+type ZonalResult = struct {
+    count: int, sum: float, mean: float, min: float, max: float, std: float
+}
+
+-- Reclassify
+r.reclassify(rules: List<Tuple<T, T, U>>) -> Raster<U>  -- (from, to, newValue)
+
+-- Vectorize
+r.toPolygons() -> List<geom.Polygon>
+r.toPoints() -> List<geom.Point>
+r.toContours(interval: float) -> List<geom.LineString>
+
+-- I/O
+r.toFile(path: string, format: string = "GeoTIFF") -> Result<unit, IOError>
+```
+
+### Files to create/modify
+- `internal/object/object.go` — Raster, RasterStack, Cell object types
+- `pkg/geo/raster/` — new package
+- `internal/eval/modules.go` — register `std.geo.raster`
+- Tests and examples
+
+---
+
+## Task 7: H3/S2 Indexing (std.geo.h3, std.geo.s2)
+Status: [ ]
+
+Spec: Section 8.10
+
+### 7a. H3 Hexagonal Indexing
+
+```geoflow
+-- Point to H3
+h3.fromPoint(point: geog.Point, resolution: int) -> H3Index
+h3.fromLatLon(lat: float, lon: float, resolution: int) -> H3Index
+
+-- H3 to geometry
+h3.toPolygon(index: H3Index) -> geog.Polygon
+h3.toPoint(index: H3Index) -> geog.Point    -- centroid
+
+-- Properties
+h3.resolution(index: H3Index) -> int
+h3.isValid(index: H3Index) -> bool
+h3.area(index: H3Index) -> float             -- square meters
+h3.edgeLength(index: H3Index) -> float       -- meters
+
+-- Hierarchy
+h3.parent(index: H3Index, resolution: int) -> H3Index
+h3.children(index: H3Index, resolution: int) -> List<H3Index>
+h3.toCenter(index: H3Index) -> H3Index
+
+-- Neighbors
+h3.kRing(index: H3Index, k: int) -> List<H3Index>
+h3.hexRange(index: H3Index, k: int) -> List<H3Index>
+h3.distance(a: H3Index, b: H3Index) -> int
+h3.line(a: H3Index, b: H3Index) -> List<H3Index>
+
+-- Polygon operations
+h3.polyfill(polygon: geog.Polygon, resolution: int) -> List<H3Index>
+h3.compact(indices: List<H3Index>) -> List<H3Index>
+h3.uncompact(indices: List<H3Index>, resolution: int) -> List<H3Index>
+
+-- String conversion
+h3.toString(index: H3Index) -> string
+h3.fromString(s: string) -> Result<H3Index, string>
+```
+
+### 7b. S2 Spherical Geometry
+
+```geoflow
+-- Point to S2 cell
+s2.fromPoint(point: geog.Point, level: int) -> S2CellId
+s2.fromLatLon(lat: float, lon: float, level: int) -> S2CellId
+
+-- S2 cell to geometry
+s2.toPolygon(cellId: S2CellId) -> geog.Polygon
+s2.toPoint(cellId: S2CellId) -> geog.Point
+
+-- Properties
+s2.level(cellId: S2CellId) -> int
+s2.area(cellId: S2CellId) -> float
+s2.isValid(cellId: S2CellId) -> bool
+
+-- Hierarchy
+s2.parent(cellId: S2CellId, level: int) -> S2CellId
+s2.children(cellId: S2CellId) -> List<S2CellId>
+
+-- Covering
+s2.cover(polygon: geog.Polygon, maxLevel: int) -> List<S2CellId>
+s2.coverRegion(region: geog.Geography, options: CoverOptions) -> List<S2CellId>
+
+-- Spatial operations
+s2.contains(cellId: S2CellId, point: geog.Point) -> bool
+s2.intersects(a: S2CellId, b: S2CellId) -> bool
+s2.distance(a: S2CellId, b: S2CellId) -> float
+
+-- Token conversion
+s2.toToken(cellId: S2CellId) -> string
+s2.fromToken(token: string) -> Result<S2CellId, string>
+```
+
+### Files to create/modify
+- `internal/object/object.go` — H3Index, S2CellId object types
+- `pkg/geo/h3/` — new package
+- `pkg/geo/s2/` — new package
+- `internal/eval/modules.go` — register `std.geo.h3`, `std.geo.s2`
+- Tests and examples
+
+---
+
+## Task 8: Advanced Geo I/O (std.geo.io)
+Status: [ ]
+
+Spec: Section 8.7 — Additional geospatial file format support beyond WKT/GeoJSON.
+
+```geoflow
+-- WKB (Well-Known Binary)
+geo.io.toWKB(g: geom.Geometry) -> List<byte>
+geo.io.fromWKB(wkb: List<byte>) -> Result<geom.Geometry, string>
+geo.io.toEWKB(g: geom.Geometry, srid: int) -> List<byte>
+geo.io.fromEWKB(ewkb: List<byte>) -> Result<geom.Geometry, string>
+
+-- KML
+geo.io.toKML(g: geom.Geometry) -> string
+geo.io.fromKML(kml: string) -> Result<geom.Geometry, string>
+
+-- GeoPackage
+geo.io.readGeoPackage(path: string) -> Result<FeatureCollection, IOError>
+geo.io.readGeoPackage(path: string, layer: string) -> Result<FeatureCollection, IOError>
+geo.io.writeGeoPackage(fc: FeatureCollection, path: string) -> Result<unit, IOError>
+
+-- Shapefile
+geo.io.readShapefile(path: string) -> Result<FeatureCollection, IOError>
+geo.io.writeShapefile(fc: FeatureCollection, path: string) -> Result<unit, IOError>
+
+-- GPX
+geo.io.fromGPX(gpx: string) -> Result<FeatureCollection, string>
+geo.io.readGPX(path: string) -> Result<FeatureCollection, IOError>
+geo.io.toGPX(fc: FeatureCollection) -> string
+
+-- GeoCSV
+geo.io.readGeoCSV(path: string, options: GeoCSVOptions = {}) -> Result<FeatureCollection, IOError>
+geo.io.writeGeoCSV(fc: FeatureCollection, path: string, options: GeoCSVOptions = {}) -> Result<unit, IOError>
+
+type GeoCSVOptions = struct {
+    geometryColumn: string,     -- default "geometry" or "WKT"
+    geometryFormat: string,     -- "WKT", "WKB", "GeoJSON", "LatLon"
+    latColumn: string,          -- for LatLon format
+    lonColumn: string,
+    delimiter: string,          -- default ","
+    hasHeader: bool             -- default true
+}
+```
+
+### Files to create/modify
+- `pkg/geo/io/` — extend existing package with new format support
+- `internal/eval/modules.go` — register `std.geo.io`
+- Tests and examples
+
+---
+
+## Task 9: Spatial Analysis (std.geo.analysis)
+Status: [ ]
+
+Spec: Section 8.9
+
+```geoflow
+-- Clustering
+analysis.dbscan(points: List<geom.Point>, eps: float, minPts: int) -> List<List<geom.Point>>
+analysis.kmeans(points: List<geom.Point>, k: int) -> List<List<geom.Point>>
+analysis.hdbscan(points: List<geom.Point>, minClusterSize: int) -> List<List<geom.Point>>
+
+-- Nearest neighbor
+analysis.nearestNeighbor(point: geom.Point, candidates: List<geom.Point>) -> geom.Point
+analysis.kNearestNeighbors(point: geom.Point, candidates: List<geom.Point>, k: int) -> List<geom.Point>
+analysis.nearestNeighborIndex(points: List<geom.Point>) -> float  -- R statistic
+
+-- Spatial autocorrelation
+analysis.moransI(values: List<float>, weights: Matrix<float>) -> MoransResult
+analysis.getisOrdG(values: List<float>, weights: Matrix<float>) -> List<float>
+
+-- Density
+analysis.kernelDensity(points: List<geom.Point>, bandwidth: float, bounds: BBox, cellSize: float) -> Raster<float>
+
+-- Quadrat analysis
+analysis.quadratCount(points: List<geom.Point>, nx: int, ny: int) -> Matrix<int>
+
+-- Network analysis
+analysis.shortestPath(network: List<geom.LineString>, start: geom.Point, end: geom.Point) -> geom.LineString
+analysis.serviceArea(network: List<geom.LineString>, center: geom.Point, distance: float) -> geom.Polygon
+analysis.closestFacility(network: List<geom.LineString>, demand: geom.Point, facilities: List<geom.Point>) -> geom.LineString
+
+-- Tessellation
+analysis.voronoi(points: List<geom.Point>, bounds: BBox) -> List<geom.Polygon>
+analysis.delaunay(points: List<geom.Point>) -> List<geom.Polygon>
+
+-- Hull algorithms
+analysis.alphaShape(points: List<geom.Point>, alpha: float) -> geom.Polygon
+analysis.concaveHull(points: List<geom.Point>, ratio: float = 0.3) -> geom.Polygon
+
+-- Interpolation
+analysis.idw(points: List<geom.Point>, values: List<float>, target: geom.Point, power: float = 2.0) -> float
+analysis.idwGrid(points: List<geom.Point>, values: List<float>, bounds: BBox, cellSize: float, power: float = 2.0) -> Raster<float>
+analysis.kriging(points: List<geom.Point>, values: List<float>, bounds: BBox, cellSize: float) -> Raster<float>
+analysis.tin(points: List<geom.Point>, values: List<float>) -> Raster<float>
+
+-- Viewshed
+analysis.viewshed(dem: Raster<float>, observer: geom.Point, observerHeight: float = 1.7, maxDistance: float = -1) -> Raster<bool>
+
+-- Least cost path
+analysis.leastCostPath(costSurface: Raster<float>, start: geom.Point, end: geom.Point) -> geom.LineString
+```
+
+### Files to create/modify
+- `pkg/geo/analysis/` — new package
+- `internal/eval/modules.go` — register `std.geo.analysis`
+- Tests and examples
+
+---
+
+## Task 10: CRS/Transform (std.geo.crs, std.geo.transform)
+Status: [ ]
+
+Spec: Sections 8.4-8.5
+
+### 10a. CRS
+
+```geoflow
+-- Built-in CRS constants
+CRS.WGS84          -- EPSG:4326
+CRS.WebMercator    -- EPSG:3857
+CRS.NAD83          -- EPSG:4269
+CRS.NAD27          -- EPSG:4267
+CRS.ETRS89         -- EPSG:4258
+
+-- Construction
+CRS.fromEPSG(code: int) -> CRS
+CRS.fromProj4(proj4: string) -> CRS
+CRS.fromWKT(wkt: string) -> CRS
+CRS.StatePlane(zone: string) -> CRS
+
+-- Properties
+crs.epsg() -> Option<int>
+crs.name() -> string
+crs.isGeographic() -> bool
+crs.isProjected() -> bool
+crs.units() -> string
+crs.toProj4() -> string
+crs.toWKT() -> string
+crs.bounds() -> BBox
+crs.datum() -> string
+crs.ellipsoid() -> Ellipsoid
+
+-- Built-in ellipsoids
+Ellipsoid.WGS84
+Ellipsoid.GRS80
+Ellipsoid.Clarke1866
+Ellipsoid.Bessel1841
+```
+
+### 10b. Transformations
+
+```geoflow
+-- Transformer class
+t.Transformer(source: CRS, target: CRS) -> Transformer
+transformer.transform(g: geom.Geometry) -> geom.Geometry
+transformer.transformPoint(x: float, y: float) -> Tuple<float, float>
+transformer.inverse() -> Transformer
+
+-- Convenience functions
+t.transform(g: geom.Geometry, from: CRS, to: CRS) -> geom.Geometry
+t.toWebMercator(g: geom.Geometry) -> geom.Geometry
+t.fromWebMercator(g: geom.Geometry) -> geom.Geometry
+t.toUTM(g: geom.Geometry, zone: int, north: bool = true) -> geom.Geometry
+
+-- Geography/Geometry conversion
+t.geographyToGeometry(g: geog.Geography, crs: CRS) -> geom.Geometry
+t.geometryToGeography(g: geom.Geometry, crs: CRS) -> geog.Geography
+
+-- Pipeline (complex multi-step transforms)
+t.Pipeline(steps: List<TransformStep>) -> Transformer
+-- e.g., t.Pipeline([t.Step.helmert(...), t.Step.projection(...)])
+```
+
+### Files to create/modify
+- `pkg/geo/crs/` — extend existing CRS package
+- `pkg/geo/transform/` — new package or extend crs
+- `internal/eval/modules.go` — register `std.geo.transform`
+- Tests and examples
+
+---
+
+## Task 11: Linear Algebra (std.math.linalg)
+Status: [ ]
+
+Spec: Section 7.4
+
+```geoflow
+-- Basic constructors (may already exist partially via Vector/Matrix types)
+la.vector(elements: List<float>) -> Vector<float>
+la.matrix(rows: List<List<float>>) -> Matrix<float>
+la.eye(n: int) -> Matrix<float>
+la.zeros(m: int, n: int) -> Matrix<float>
+la.ones(m: int, n: int) -> Matrix<float>
+la.diag(values: List<float>) -> Matrix<float>
+
+-- Solving linear systems
+la.solve(A: Matrix<float>, b: Vector<float>) -> Vector<float>    -- Ax = b
+la.solveLU(A: Matrix<float>, b: Vector<float>) -> Vector<float>
+la.solveQR(A: Matrix<float>, b: Vector<float>) -> Vector<float>
+la.solveSVD(A: Matrix<float>, b: Vector<float>) -> Vector<float>
+la.lstsq(A: Matrix<float>, b: Vector<float>) -> LeastSquaresResult
+
+-- Eigenvalue problems
+la.eig(A: Matrix<float>) -> Tuple<List<Complex>, Matrix<Complex>>
+la.eigvals(A: Matrix<float>) -> List<Complex>
+la.eigsh(A: Matrix<float>) -> Tuple<List<float>, Matrix<float>>  -- symmetric
+
+-- SVD
+la.svd(A: Matrix<float>) -> Tuple<Matrix<float>, List<float>, Matrix<float>>
+la.svdvals(A: Matrix<float>) -> List<float>
+la.lowRankApprox(A: Matrix<float>, k: int) -> Matrix<float>
+
+-- Matrix factorizations
+la.lu(A: Matrix<float>) -> Tuple<Matrix<float>, Matrix<float>, List<int>>
+la.qr(A: Matrix<float>) -> Tuple<Matrix<float>, Matrix<float>>
+la.cholesky(A: Matrix<float>) -> Matrix<float>
+la.schur(A: Matrix<float>) -> Tuple<Matrix<float>, Matrix<float>>
+
+-- Properties
+la.rank(A: Matrix<float>) -> int
+la.nullspace(A: Matrix<float>) -> Matrix<float>
+la.columnspace(A: Matrix<float>) -> Matrix<float>
+la.det(A: Matrix<float>) -> float
+la.trace(A: Matrix<float>) -> float
+la.cond(A: Matrix<float>) -> float
+
+-- Norms
+la.norm(v: Vector<float>, p: float = 2.0) -> float
+la.norm(A: Matrix<float>, p: string = "fro") -> float  -- "fro", "1", "2", "inf"
+
+-- Special matrices
+la.hilbert(n: int) -> Matrix<float>
+la.vandermonde(v: Vector<float>, n: int) -> Matrix<float>
+la.toeplitz(c: Vector<float>, r: Vector<float>) -> Matrix<float>
+la.companion(coeffs: Vector<float>) -> Matrix<float>
+
+-- Kronecker and Hadamard products
+la.kron(A: Matrix<float>, B: Matrix<float>) -> Matrix<float>
+la.hadamard(A: Matrix<float>, B: Matrix<float>) -> Matrix<float>
+
+-- Matrix functions
+la.expm(A: Matrix<float>) -> Matrix<float>
+la.logm(A: Matrix<float>) -> Matrix<float>
+la.sqrtm(A: Matrix<float>) -> Matrix<float>
+la.funm(A: Matrix<float>, f: Fn<(float) -> float>) -> Matrix<float>
+```
+
+### Files to create/modify
+- `pkg/stdlib/math/linalg/` — new package
+- `internal/eval/modules.go` — register `std.math.linalg`
+- Tests and examples
+
+---
+
+## Task 12: Geography (std.geo.geog)
+Status: [ ]
+
+Spec: Section 8.3
+
+```geoflow
+-- Construction
+geog.Point(lon: float, lat: float) -> geog.Point
+geog.PointZ(lon: float, lat: float, altitude: float) -> geog.PointZ
+geog.Point(latitude: float, longitude: float) -> geog.Point  -- named params
+geog.fromGeometry(g: geom.Geometry, crs: CRS) -> geog.Geography
+geog.fromWKT(wkt: string) -> Result<geog.Geography, string>
+geog.LineString(points: List<geog.Point>) -> geog.LineString
+geog.Polygon(rings: List<List<geog.Point>>) -> geog.Polygon
+
+-- Point properties
+p.latitude -> float
+p.longitude -> float
+p.lon -> float
+p.lat -> float
+p.altitude -> Option<float>
+p.elevation -> Option<float>
+
+-- Measurements (geodesic on WGS84 spheroid)
+p1.distanceTo(p2: geog.Point) -> float         -- meters
+g1.distance(g2: geog.Geography) -> float        -- meters
+ls.length() -> float                            -- meters
+poly.area() -> float                            -- square meters
+p1.azimuthTo(p2: geog.Point) -> float           -- radians
+poly.perimeter() -> float                       -- meters
+
+-- Geodetic operations
+p.project(distance: float, azimuth: float) -> geog.Point
+p1.interpolate(p2: geog.Point, fraction: float) -> geog.Point
+g.densify(maxSegmentLength: float) -> geog.Geography
+g.buffer(distanceMeters: float) -> geog.Polygon
+g1.intersects(g2: geog.Geography) -> bool
+g1.contains(g2: geog.Geography) -> bool
+g1.within(g2: geog.Geography) -> bool
+g.toGeometry(crs: CRS) -> geom.Geometry
+```
+
+### What exists (partially)
+- `pkg/geo/geog/` has basic geodesic distance/bearing via Vincenty.
+
+### What's missing
+- Geography-specific object types (currently uses same Point/LineString types)
+- Named parameter construction
+- Most geodetic operations (buffer, intersects, contains, etc.)
+- `fromGeometry`, `toGeometry` conversion
+
+### Files to modify
+- `pkg/geo/geog/` — extend existing package
+- `internal/object/object.go` — possibly geography-specific types
+- `internal/eval/modules.go` — register/update `std.geo.geog`
+- Tests and examples
+
+---
+
+## Task 13: Assertions (std.assert)
+Status: [ ]
+
+Spec: Section 6.6
+
+```geoflow
+-- Basic
+assert(condition: bool)
+assert(condition: bool, message: string)
+
+-- Value
+assert.equal<T>(actual: T, expected: T)
+assert.notEqual<T>(actual: T, expected: T)
+assert.same<T>(actual: T, expected: T)          -- reference equality
+assert.nil<T>(value: Option<T>)
+assert.notNil<T>(value: Option<T>)
+assert.ok<T, E>(result: Result<T, E>)
+assert.err<T, E>(result: Result<T, E>)
+
+-- Numeric
+assert.approximately(actual: float, expected: float, epsilon: float = 1e-10)
+assert.greaterThan<T: Ord>(actual: T, expected: T)
+assert.lessThan<T: Ord>(actual: T, expected: T)
+assert.greaterOrEqual<T: Ord>(actual: T, expected: T)
+assert.lessOrEqual<T: Ord>(actual: T, expected: T)
+assert.between<T: Ord>(value: T, low: T, high: T)
+assert.positive(value: float)
+assert.negative(value: float)
+assert.finite(value: float)
+assert.NaN(value: float)
+
+-- Collection
+assert.empty<T>(collection: List<T>)
+assert.notEmpty<T>(collection: List<T>)
+assert.length<T>(collection: List<T>, expected: int)
+assert.contains<T>(collection: List<T>, item: T)
+assert.containsAll<T>(collection: List<T>, items: List<T>)
+assert.containsNone<T>(collection: List<T>, items: List<T>)
+
+-- String
+assert.startsWith(actual: string, prefix: string)
+assert.endsWith(actual: string, suffix: string)
+assert.contains(actual: string, substring: string)
+assert.matches(actual: string, pattern: string)
+assert.blank(actual: string)
+
+-- Type
+assert.type<T>(value: auto)
+assert.instanceof<T>(value: auto)
+
+-- Exception
+assert.throws(f: Fn<() -> auto>)
+assert.throws<E>(f: Fn<() -> auto>)
+assert.doesNotThrow(f: Fn<() -> auto>)
+
+-- Geospatial
+assert.geo.valid(geometry: geom.Geometry)
+assert.geo.equal(a: geom.Geometry, b: geom.Geometry, tolerance: float = 1e-10)
+assert.geo.intersects(a: geom.Geometry, b: geom.Geometry)
+assert.geo.contains(container: geom.Geometry, contained: geom.Geometry)
+assert.geo.within(inner: geom.Geometry, outer: geom.Geometry)
+assert.geo.disjoint(a: geom.Geometry, b: geom.Geometry)
+assert.geo.nearEqual(a: geog.Point, b: geog.Point, toleranceMeters: float)
+
+-- Soft assertions
+let soft = assert.soft()
+soft.equal(a, b)
+soft.greaterThan(x, y)
+soft.assertAll()
+```
+
+### Files to modify
+- `pkg/stdlib/assert/` — extend existing package
+- `internal/eval/modules.go` — update registration
+- Tests and examples
+
+---
+
+## Task 14: Logging (std.log)
+Status: [ ]
+
+Spec: Section 6.5
+
+```geoflow
+-- Levels
+log.Level = enum { Trace, Debug, Info, Warn, Error, Fatal }
+
+-- Basic logging
+log.trace(message: string)
+log.debug(message: string)
+log.info(message: string)
+log.warn(message: string)
+log.error(message: string)
+log.fatal(message: string)                      -- terminates program
+
+-- Structured logging
+log.info("message", { "key": value, ... })
+
+-- Configuration
+log.setLevel(level: log.Level)
+log.setFormat(format: string)                   -- "[{level}] {time} - {message}"
+log.setOutput(writer: Writer)
+log.addOutput(writer: Writer)
+
+-- Context/scoped
+let logger = log.withContext({ "module": "geo", "operation": "buffer" })
+logger.info("Starting buffer operation")
+
+-- Timed
+log.timed("label", fn() { ... })               -- "label completed in 123ms"
+
+-- Conditional
+log.debugIf(condition, "message")
+
+-- Output types
+log.ConsoleOutput(colored: bool = true) -> Writer
+log.FileOutput(path: string, rotate: bool = false) -> Writer
+log.JSONOutput(writer: Writer) -> Writer
+```
+
+### Files to modify
+- `pkg/stdlib/log/` — extend existing package
+- `internal/eval/modules.go` — update registration
+- Tests and examples
+
+---
+
+## Task 15: Statistics (std.math.stats)
+Status: [ ]
+
+Spec: Section 7.2
+
+### What exists
+- Basic: mean, median, mode, variance, stddev, percentile, iqr, zscore, correlation,
+  covariance, moving mean.
+
+### What's missing
+
+```geoflow
+-- Descriptive (missing)
+stats.sem(data: List<float>) -> float
+stats.skewness(data: List<float>) -> float
+stats.kurtosis(data: List<float>) -> float
+stats.quartiles(data: List<float>) -> Tuple<float, float, float>
+stats.range(data: List<float>) -> float
+stats.product(data: List<float>) -> float
+
+-- Weighted
+stats.weightedMean(data: List<float>, weights: List<float>) -> float
+stats.weightedVariance(data: List<float>, weights: List<float>) -> float
+
+-- Correlation (missing)
+stats.spearman(x: List<float>, y: List<float>) -> float
+stats.kendall(x: List<float>, y: List<float>) -> float
+stats.autocorr(data: List<float>, lag: int) -> float
+
+-- Regression
+stats.linearRegression(x: List<float>, y: List<float>) -> LinearModel
+type LinearModel = struct { slope, intercept, rSquared, stdErr: float }
+model.predict(x: float) -> float
+model.predict(xs: List<float>) -> List<float>
+stats.polynomialRegression(x: List<float>, y: List<float>, degree: int) -> PolyModel
+
+-- Distributions
+stats.normal(mean: float, std: float) -> Distribution
+stats.uniform(low: float, high: float) -> Distribution
+stats.exponential(rate: float) -> Distribution
+stats.poisson(lambda: float) -> Distribution
+stats.binomial(n: int, p: float) -> Distribution
+stats.gamma(shape: float, scale: float) -> Distribution
+stats.beta(alpha: float, beta: float) -> Distribution
+stats.chisquare(df: int) -> Distribution
+stats.t(df: int) -> Distribution
+stats.f(df1: int, df2: int) -> Distribution
+
+-- Distribution methods
+dist.pdf(x: float) -> float
+dist.cdf(x: float) -> float
+dist.ppf(p: float) -> float
+dist.sample() -> float
+dist.sample(n: int) -> List<float>
+dist.mean() -> float
+dist.variance() -> float
+
+-- Hypothesis testing
+stats.tTest(sample1: List<float>, sample2: List<float>) -> TestResult
+stats.pairedTTest(sample1: List<float>, sample2: List<float>) -> TestResult
+stats.oneSampleTTest(sample: List<float>, mu: float) -> TestResult
+stats.anova(groups: ...List<float>) -> TestResult
+stats.chiSquareTest(observed: List<int>, expected: List<float>) -> TestResult
+stats.ksTest(data: List<float>, dist: Distribution) -> TestResult
+
+type TestResult = struct { statistic, pValue: float, degreesOfFreedom: int }
+
+-- Confidence intervals
+stats.confidenceInterval(data: List<float>, level: float = 0.95) -> Tuple<float, float>
+stats.bootstrapCI(data: List<float>, statFn: Fn, nResamples: int = 1000, level: float = 0.95) -> Tuple<float, float>
+
+-- Normalization (missing)
+stats.minMaxScale(data: List<float>, newMin: float = 0.0, newMax: float = 1.0) -> List<float>
+stats.standardize(data: List<float>) -> List<float>
+
+-- Outlier detection
+stats.outliers(data: List<float>, method: string = "iqr") -> List<int>
+stats.trimmedMean(data: List<float>, proportionToCut: float) -> float
+stats.winsorize(data: List<float>, limits: Tuple<float, float>) -> List<float>
+
+-- Moving statistics (missing)
+stats.movingStd(data: List<float>, window: int) -> List<float>
+stats.ewma(data: List<float>, alpha: float) -> List<float>
+```
+
+### Files to modify
+- `internal/stdlib/math.go` — extend stats functions
+- `internal/object/object.go` — Distribution, LinearModel, TestResult types
+- `internal/eval/modules.go` — update registration
+- Tests and examples
+
+---
+
+## Task 16: Strings (std.string)
+Status: [ ]
+
+Spec: Section 6.2
+
+### What exists
+- length, uppercase, lowercase, trim, contains, split, replace (via string methods in eval.go)
+
+### What's missing
+
+```geoflow
+-- Construction
+string.from<T>(value: T) -> string
+string.repeat(s: string, n: int) -> string
+string.join(parts: List<string>, sep: string) -> string
+
+-- Properties (missing)
+s.isEmpty() -> bool
+s.isBlank() -> bool
+
+-- Case (missing)
+s.capitalize() -> string
+s.titleCase() -> string
+
+-- Trimming (missing)
+s.trimStart() -> string
+s.trimEnd() -> string
+s.strip(chars: string) -> string
+
+-- Search (missing)
+s.startsWith(prefix: string) -> bool
+s.endsWith(suffix: string) -> bool
+s.indexOf(sub: string) -> Option<int>
+s.lastIndexOf(sub: string) -> Option<int>
+s.count(sub: string) -> int
+
+-- Extraction (missing)
+s.charAt(i: int) -> Option<string>
+s.substring(start: int, end: int) -> string
+s.slice(start: int, end: int = -1) -> string
+s.splitAt(i: int) -> Tuple<string, string>
+s.lines() -> List<string>
+s.words() -> List<string>
+
+-- Modification (missing)
+s.replaceAll(old: string, new: string) -> string
+s.replaceFirst(old: string, new: string) -> string
+s.insert(i: int, sub: string) -> string
+s.remove(start: int, end: int) -> string
+s.reverse() -> string
+s.padStart(len: int, char: string = " ") -> string
+s.padEnd(len: int, char: string = " ") -> string
+
+-- Regex (missing)
+s.matches(pattern: string) -> bool
+s.findAll(pattern: string) -> List<string>
+s.replaceRegex(pattern: string, replacement: string) -> string
+s.capture(pattern: string) -> Option<List<string>>
+
+-- Parsing (missing)
+s.parseInt() -> Result<int, string>
+s.parseFloat() -> Result<float, string>
+s.parseBool() -> Result<bool, string>
+
+-- Formatting (missing)
+string.format(template: string, args: ...auto) -> string
+```
+
+### Files to modify
+- `internal/eval/eval.go` — `evalStringMethod` (extend switch)
+- `pkg/stdlib/string/` — possibly new package for module-level functions
+- Tests and examples
+
+---
+
+## Task 17: Collections (std.collections)
+Status: [ ]
+
+Spec: Section 6.3
+
+### What exists
+- List: map, filter, reduce/fold, sort, reverse, flatten, zip, forEach, contains,
+  find, any, all, concat, append, length, first, last, head, tail, take, drop,
+  slice, enumerate, sum, chunked
+- Map: get, keys, values, entries, put, remove, size, contains
+- Set: basic type exists, add/remove/contains
+
+### What's missing
+
+#### List (missing)
+```geoflow
+-- Construction
+List.empty<T>() -> List<T>
+List.of<T>(items: ...T) -> List<T>
+List.repeat<T>(item: T, n: int) -> List<T>
+List.range(start: int, end: int, step: int = 1) -> List<int>
+List.generate<T>(n: int, f: Fn<(int) -> T>) -> List<T>
+
+-- Access (missing)
+list.get(i: int) -> Option<T>
+list.init() -> List<T>
+
+-- Search (missing)
+list.findIndex(pred: Fn<(T) -> bool>) -> Option<int>
+list.none(pred: Fn<(T) -> bool>) -> bool
+list.indexOf(item: T) -> Option<int>
+
+-- Transform (missing)
+list.flatMap<U>(f: Fn<(T) -> List<U>>) -> List<U>
+list.filterMap<U>(f: Fn<(T) -> Option<U>>) -> List<U>
+list.takeWhile(pred: Fn<(T) -> bool>) -> List<T>
+list.dropWhile(pred: Fn<(T) -> bool>) -> List<T>
+list.sortBy<K: Ord>(f: Fn<(T) -> K>) -> List<T>
+list.sortWith(cmp: Fn<(T, T) -> int>) -> List<T>
+list.distinct() -> List<T>
+list.distinctBy<K>(f: Fn<(T) -> K>) -> List<T>
+
+-- Aggregation (missing)
+list.foldRight<U>(init: U, f: Fn<(T, U) -> U>) -> U
+list.scan<U>(init: U, f: Fn<(U, T) -> U>) -> List<U>
+list.product() -> T
+list.min() -> Option<T>
+list.max() -> Option<T>
+list.minBy<K: Ord>(f: Fn<(T) -> K>) -> Option<T>
+list.maxBy<K: Ord>(f: Fn<(T) -> K>) -> Option<T>
+
+-- Combination (missing)
+list.prepend(item: T) -> List<T>
+list.insert(i: int, item: T) -> List<T>
+list.remove(i: int) -> List<T>
+list.zipWith<U, V>(other: List<U>, f: Fn<(T, U) -> V>) -> List<V>
+list.unzip<A, B>() -> Tuple<List<A>, List<B>>
+list.intersperse(sep: T) -> List<T>
+list.interleave(other: List<T>) -> List<T>
+
+-- Grouping (missing)
+list.partition(pred: Fn<(T) -> bool>) -> Tuple<List<T>, List<T>>
+list.groupBy<K>(f: Fn<(T) -> K>) -> Map<K, List<T>>
+list.windowed(size: int, step: int = 1) -> List<List<T>>
+
+-- Properties (missing)
+list.isEmpty() -> bool
+list.nonEmpty() -> bool
+```
+
+#### Map (missing)
+```geoflow
+-- Construction
+Map.empty<K, V>() -> Map<K, V>
+Map.of<K, V>(pairs: ...Tuple<K, V>) -> Map<K, V>
+Map.fromList<K, V>(pairs: List<Tuple<K, V>>) -> Map<K, V>
+
+-- Access (missing)
+map.getOrDefault(key: K, default: V) -> V
+map.isEmpty() -> bool
+
+-- Modification (missing)
+map.putAll(other: Map<K, V>) -> Map<K, V>
+map.update(key: K, f: Fn<(V) -> V>) -> Map<K, V>
+map.updateOrInsert(key: K, default: V, f: Fn<(V) -> V>) -> Map<K, V>
+
+-- Transform (missing)
+map.mapValues<U>(f: Fn<(V) -> U>) -> Map<K, U>
+map.mapKeys<J>(f: Fn<(K) -> J>) -> Map<J, V>
+map.filter(pred: Fn<(K, V) -> bool>) -> Map<K, V>
+map.filterKeys(pred: Fn<(K) -> bool>) -> Map<K, V>
+map.filterValues(pred: Fn<(V) -> bool>) -> Map<K, V>
+map.merge(other: Map<K, V>, resolve: Fn<(V, V) -> V>) -> Map<K, V>
+```
+
+#### Set (missing)
+```geoflow
+-- Construction
+Set.empty<T>() -> Set<T>
+Set.of<T>(items: ...T) -> Set<T>
+Set.fromList<T>(items: List<T>) -> Set<T>
+
+-- Properties (missing)
+set.size() -> int
+set.isEmpty() -> bool
+set.toList() -> List<T>
+
+-- Membership (missing)
+set.isSubset(other: Set<T>) -> bool
+set.isSuperset(other: Set<T>) -> bool
+set.isDisjoint(other: Set<T>) -> bool
+
+-- Modification (missing)
+set.toggle(item: T) -> Set<T>
+
+-- Set operations (missing)
+set.union(other: Set<T>) -> Set<T>
+set.intersection(other: Set<T>) -> Set<T>
+set.difference(other: Set<T>) -> Set<T>
+set.symmetricDifference(other: Set<T>) -> Set<T>
+
+-- Transform (missing)
+set.map<U>(f: Fn<(T) -> U>) -> Set<U>
+set.filter(pred: Fn<(T) -> bool>) -> Set<T>
+set.flatMap<U>(f: Fn<(T) -> Set<U>>) -> Set<U>
+```
+
+### Files to modify
+- `internal/eval/eval.go` — extend `evalListMethod`, `evalMapMethod`, `evalSetMethod`
+- `pkg/stdlib/collections/` — extend with module-level constructors
+- `internal/object/builtins.go` — new builtins if needed
+- Tests and examples
+
+---
+
+## Task 18: Geometry (std.geo.geom)
+Status: [ ]
+
+Spec: Section 8.2
+
+### What exists
+- Basic geometry types (Point, LineString, Polygon, Multi*, GeometryCollection, BBox, Feature, FeatureCollection)
+- WKT parsing, GeoJSON I/O
+- Basic spatial operations: buffer, intersection, union, difference, convexHull,
+  centroid, distance, area, length, contains, intersects, within
+- Basic simplify, envelope, bounds
+
+### What's missing
+
+```geoflow
+-- Properties (missing)
+g.isSimple() -> bool
+g.dimension() -> int
+g.coordinateDimension() -> int
+g.hasZ() -> bool
+g.hasM() -> bool
+g.srid() -> Option<int>
+g.setSRID(srid: int) -> Geometry
+ls.isClosed() -> bool
+ls.isRing() -> bool
+poly.signedArea() -> float
+
+-- Distance variants (missing)
+g1.hausdorffDistance(g2: geom.Geometry) -> float
+g1.frechetDistance(g2: geom.Geometry) -> float
+
+-- Spatial relationships (missing)
+g1.equals(g2: geom.Geometry) -> bool
+g1.disjoint(g2: geom.Geometry) -> bool
+g1.touches(g2: geom.Geometry) -> bool
+g1.crosses(g2: geom.Geometry) -> bool
+g1.overlaps(g2: geom.Geometry) -> bool
+g1.covers(g2: geom.Geometry) -> bool
+g1.coveredBy(g2: geom.Geometry) -> bool
+g1.relate(g2: geom.Geometry) -> string
+g1.relate(g2: geom.Geometry, pattern: string) -> bool
+
+-- Spatial operations (missing)
+g1.symDifference(g2: geom.Geometry) -> geom.Geometry
+geom.unaryUnion(geoms: List<geom.Geometry>) -> geom.Geometry
+g.buffer(distance: float, options: BufferOptions) -> geom.Polygon  -- advanced options
+g.pointOnSurface() -> geom.Point
+g.simplifyPreserveTopology(tolerance: float) -> geom.Geometry
+g.douglasPeucker(tolerance: float) -> geom.Geometry
+g.visvalingamWhyatt(threshold: float) -> geom.Geometry
+g.densify(maxSegmentLength: float) -> geom.Geometry
+g.makeValid() -> geom.Geometry
+g.snap(reference: geom.Geometry, tolerance: float) -> geom.Geometry
+
+-- Line operations (missing)
+ls.merge(other: geom.LineString) -> geom.LineString
+ls.substring(startFraction: float, endFraction: float) -> geom.LineString
+ls.interpolate(fraction: float) -> geom.Point
+ls.interpolatePoint(distance: float) -> geom.Point
+ls.locatePoint(point: geom.Point) -> float
+
+-- Polygon operations (missing)
+poly.orientExteriorCCW() -> geom.Polygon
+poly.removeHoles() -> geom.Polygon
+
+-- Affine transformations (missing)
+g.translate(dx: float, dy: float) -> geom.Geometry
+g.translate(dx: float, dy: float, dz: float) -> geom.Geometry
+g.scale(factor: float) -> geom.Geometry
+g.scale(fx: float, fy: float) -> geom.Geometry
+g.scale(fx: float, fy: float, origin: geom.Point) -> geom.Geometry
+g.rotate(angle: float) -> geom.Geometry
+g.rotate(angle: float, origin: geom.Point) -> geom.Geometry
+g.rotateZ(angle: float) -> geom.Geometry
+g.reflect(axis: string) -> geom.Geometry
+g.shear(shx: float, shy: float) -> geom.Geometry
+g.affine(matrix: Matrix<float, 3, 3>) -> geom.Geometry
+g.affine3D(matrix: Matrix<float, 4, 4>) -> geom.Geometry
+```
+
+### Files to modify
+- `internal/stdlib/geo.go` — extend spatial operations
+- `internal/eval/eval.go` — extend geometry method evaluation
+- Tests and examples
+
+---
+
+## Task 19: Time (std.time)
+Status: [ ]
+
+Spec: Section 6.8
+
+### What exists
+- DateTime, Duration types
+- time.now(), DateTime.parse(), basic components (year/month/day/hour/minute/second)
+- Duration construction (seconds/minutes/hours/days)
+- DateTime arithmetic (+/- Duration), toISO8601, toUnix
+
+### What's missing
+
+```geoflow
+-- Types (missing)
+Instant                                         -- monotonic clock
+
+-- Construction (missing)
+DateTime.fromUnixMillis(millis: int) -> DateTime
+DateTime.new(year, month, day, hour=0, minute=0, second=0) -> DateTime
+Duration.millis(n: int) -> Duration
+time.instant() -> Instant
+
+-- Components (missing)
+dt.millisecond() -> int
+dt.dayOfWeek() -> int
+dt.dayOfYear() -> int
+dt.weekOfYear() -> int
+dt.quarter() -> int
+
+-- Comparison (missing)
+dt.isBefore(other: DateTime) -> bool
+dt.isAfter(other: DateTime) -> bool
+dt.isBetween(start: DateTime, end: DateTime) -> bool
+
+-- Formatting (missing)
+dt.format(pattern: string) -> string            -- custom pattern
+dt.toUnixMillis() -> int
+
+-- Manipulation (missing)
+dt.withYear(year: int) -> DateTime
+dt.withMonth(month: int) -> DateTime
+dt.withDay(day: int) -> DateTime
+dt.startOfDay() -> DateTime
+dt.endOfDay() -> DateTime
+dt.startOfMonth() -> DateTime
+dt.startOfYear() -> DateTime
+
+-- Timezone (missing)
+dt.inTimezone(tz: string) -> DateTime
+dt.toUTC() -> DateTime
+dt.timezone() -> string
+dt.offset() -> Duration
+
+-- Duration (missing)
+dur.toSeconds() -> float
+dur.toMinutes() -> float
+dur.toHours() -> float
+dur.toDays() -> float
+dur.toMillis() -> int
+
+-- Measuring (missing)
+start.elapsed() -> Duration                     -- for Instant
+```
+
+### Files to modify
+- `pkg/stdlib/time/` — extend existing package
+- `internal/object/object.go` — add Instant type
+- `internal/eval/eval.go` — extend DateTime/Duration method evaluation
+- Tests and examples
+
+---
+
+## Task 20: I/O (std.io)
+Status: [ ]
+
+Spec: Section 6.7
+
+### What exists
+- readFile, writeFile, appendFile, readLines
+- exists, isFile, isDir, listDir, createDir, createDirAll
+- path.join, path.dirname, path.basename, path.extension, path.absolute
+- JSON parsing (io.parseJSON, io.toJSON)
+- CSV reading (io.readCSV)
+
+### What's missing
+
+```geoflow
+-- File reading (missing)
+io.readBytes(path: string) -> Result<List<byte>, IOError>
+
+-- File writing (missing)
+io.writeBytes(path: string, content: List<byte>) -> Result<unit, IOError>
+
+-- File info (missing)
+io.fileSize(path: string) -> Result<int, IOError>
+io.modifiedTime(path: string) -> Result<DateTime, IOError>
+
+-- Directory (missing)
+io.removeFile(path: string) -> Result<unit, IOError>
+io.removeDir(path: string) -> Result<unit, IOError>
+io.removeDirAll(path: string) -> Result<unit, IOError>
+io.copy(src: string, dst: string) -> Result<unit, IOError>
+io.move(src: string, dst: string) -> Result<unit, IOError>
+
+-- Path (missing)
+io.path.relative(path: string, base: string) -> string
+
+-- Streaming (missing)
+io.Reader trait
+io.Writer trait
+io.openFile(path: string, mode: string) -> Result<File, IOError>
+
+-- Stdin/Stdout/Stderr (missing)
+io.stdin: Reader
+io.stdout: Writer
+io.stderr: Writer
+io.print(value: auto)
+io.println(value: auto)
+io.readLine() -> Result<string, IOError>
+```
+
+### Files to modify
+- `pkg/stdlib/io/` — extend existing package
+- `internal/eval/modules.go` — update registration
+- Tests and examples
+
+---
+
+## Task 21: Remaining / Miscellaneous
+Status: [ ]
+
+Items not covered above that appear in the spec:
+
+### 21a. Stream Type (Section 3.2)
+```geoflow
+Stream<T>           -- lazy, potentially infinite sequence
+-- Construction, transformation, consumption methods TBD
+```
+
+### 21b. Mutable Collections (Section 1.4.5)
+```geoflow
+import std.collections.mutable as mut
+mut.List<T>(), mut.Map<K, V>()
+buffer.push(), buffer.clear(), buffer.freeze()
+counts.update()
+```
+
+### 21c. 3D/M Geometry Variants (Section 3.4.1)
+```geoflow
+geom.PointZ, geom.PointM, geom.PointZM
+geom.LineStringZ, geom.LineStringM, geom.LineStringZM
+geom.PolygonZ, etc.
+```
+
+### 21d. Error Propagation Operator (?) (Section 4.4)
+- Verify `?` operator works correctly in all contexts (function returns, chaining).
+
+### 21e. yield keyword (Section 2.4)
+- `yield` is listed as a keyword but may not be implemented for generators/streams.
+
+### 21f. byte type (Section 3.1)
+- `byte` is listed as a primitive (8-bit unsigned) but may not have a runtime type.
+
+### 21g. Poly<T> type (Section 3.3)
+- Polynomial type for symbolic/numeric polynomial operations.
+
+---
+
+## Completed Tasks
+
+(Move tasks here when done, with completion date and deviation notes)
+
+### [DONE] Dot Composition and Juxtaposition Composition (2026-02-11)
+- Implemented `f . g` (right-to-left) and `f g` (left-to-right juxtaposition)
+- Parser: Added COMPOSITION precedence, JuxtapositionExpression AST node
+- Evaluator: Dot composition fallback in evalDotExpression, InfixExpression "." for
+  lambda dot composition, evalJuxtapositionExpression
+- Deviation: Plan originally said parser-only for dot. Had to also modify parser's
+  parseDotExpression to handle non-identifier right sides (lambdas) by emitting
+  InfixExpression with "." operator, and add corresponding evaluator handling.

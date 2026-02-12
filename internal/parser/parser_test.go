@@ -96,6 +96,103 @@ func TestFunctionDefinition(t *testing.T) {
 	}
 }
 
+func TestDefaultParameters(t *testing.T) {
+	input := `fn greet(name, greeting = "Hello") { greeting }`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected LetStatement, got %T", program.Statements[0])
+	}
+
+	fn, ok := stmt.Value.(*ast.FunctionLiteral)
+	if !ok {
+		t.Fatalf("expected FunctionLiteral, got %T", stmt.Value)
+	}
+
+	if len(fn.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(fn.Parameters))
+	}
+
+	// First param: no default
+	if fn.Parameters[0].Default != nil {
+		t.Errorf("expected no default for param 0, got %s", fn.Parameters[0].Default.String())
+	}
+
+	// Second param: has default
+	if fn.Parameters[1].Default == nil {
+		t.Fatal("expected default for param 1, got nil")
+	}
+	if fn.Parameters[1].Default.String() != `"Hello"` {
+		t.Errorf("expected default \"Hello\", got %s", fn.Parameters[1].Default.String())
+	}
+}
+
+func TestVariadicParameters(t *testing.T) {
+	input := `fn sum(...numbers) { numbers }`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected LetStatement, got %T", program.Statements[0])
+	}
+
+	fn, ok := stmt.Value.(*ast.FunctionLiteral)
+	if !ok {
+		t.Fatalf("expected FunctionLiteral, got %T", stmt.Value)
+	}
+
+	if len(fn.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(fn.Parameters))
+	}
+
+	if !fn.Parameters[0].Variadic {
+		t.Error("expected param 0 to be variadic")
+	}
+	if fn.Parameters[0].Name.Value != "numbers" {
+		t.Errorf("expected param name 'numbers', got %q", fn.Parameters[0].Name.Value)
+	}
+}
+
+func TestVariadicWithRequiredParams(t *testing.T) {
+	input := `fn f(a, b, ...rest) { rest }`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.LetStatement)
+	fn := stmt.Value.(*ast.FunctionLiteral)
+
+	if len(fn.Parameters) != 3 {
+		t.Fatalf("expected 3 parameters, got %d", len(fn.Parameters))
+	}
+
+	if fn.Parameters[0].Variadic {
+		t.Error("param 0 should not be variadic")
+	}
+	if fn.Parameters[1].Variadic {
+		t.Error("param 1 should not be variadic")
+	}
+	if !fn.Parameters[2].Variadic {
+		t.Error("param 2 should be variadic")
+	}
+}
+
 func TestPipelineExpression(t *testing.T) {
 	input := `x |> f |> g`
 	l := lexer.New(input)

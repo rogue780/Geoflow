@@ -622,6 +622,102 @@ f(5)`
 	testIntegerObject(t, evaluated, 18, input)
 }
 
+func TestDefaultParameters(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		// Default used
+		{`fn add(a, b = 10) { a + b }
+add(1)`, 11},
+		// Default overridden
+		{`fn add(a, b = 10) { a + b }
+add(1, 2)`, 3},
+		// Multiple defaults, all used
+		{`fn add(a, b = 10, c = 20) { a + b + c }
+add(1)`, 31},
+		// Multiple defaults, one overridden
+		{`fn add(a, b = 10, c = 20) { a + b + c }
+add(1, 2)`, 23},
+		// Multiple defaults, all overridden
+		{`fn add(a, b = 10, c = 20) { a + b + c }
+add(1, 2, 3)`, 6},
+		// Partial application with default params
+		{`fn add(a, b, c = 10) { a + b + c }
+let addOne = add(1)
+addOne(2)`, 13},
+		// Partial application overriding default
+		{`fn add(a, b, c = 10) { a + b + c }
+let addOne = add(1)
+addOne(2, 3)`, 6},
+		// Default referencing earlier expression
+		{`fn f(a, b = 5) { a * b }
+f(3)`, 15},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+}
+
+func TestVariadicFunctions(t *testing.T) {
+	intTests := []struct {
+		input    string
+		expected int64
+	}{
+		// Basic variadic: collect all args into list, reduce
+		{`fn sum(...numbers) {
+	numbers.reduce(0, \acc, n -> acc + n)
+}
+sum(1, 2, 3)`, 6},
+		// Variadic with single arg
+		{`fn sum(...numbers) {
+	numbers.reduce(0, \acc, n -> acc + n)
+}
+sum(42)`, 42},
+		// Variadic with zero args
+		{`fn sum(...numbers) {
+	numbers.reduce(0, \acc, n -> acc + n)
+}
+sum()`, 0},
+		// Variadic with preceding required params
+		{`fn addTo(base, ...numbers) {
+	base + numbers.reduce(0, \acc, n -> acc + n)
+}
+addTo(100, 1, 2, 3)`, 106},
+		// Variadic with preceding required params, zero variadic args
+		{`fn addTo(base, ...numbers) {
+	base + numbers.reduce(0, \acc, n -> acc + n)
+}
+addTo(100)`, 100},
+		// Variadic length check
+		{`fn count(...items) { len(items) }
+count(1, 2, 3, 4, 5)`, 5},
+		// Variadic with preceding required and default params
+		{`fn f(a, b = 10, ...rest) {
+	a + b + len(rest)
+}
+f(1)`, 11},
+		// Variadic with preceding required and default params, default overridden
+		{`fn f(a, b = 10, ...rest) {
+	a + b + len(rest)
+}
+f(1, 2, 3, 4)`, 5},
+	}
+
+	for _, tt := range intTests {
+		evaluated := testEval(tt.input)
+		testIntegerObject(t, evaluated, tt.expected, tt.input)
+	}
+
+	// Test that variadic param is a list
+	input := `fn first(...args) { args[0] }
+first(10, 20, 30)`
+	evaluated := testEval(input)
+	testIntegerObject(t, evaluated, 10, input)
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)
