@@ -161,3 +161,25 @@ fn dist3d(p1, p2) {
 let pointA = linalg.vec(1, 2, 3)
 let pointB = linalg.vec(4, 6, 3)
 println("\nDistance from", pointA, "to", pointB, ":", dist3d(pointA, pointB))
+
+-- ══════════════════════════════════════
+-- ── Numeric Literal Formats ──
+-- ══════════════════════════════════════
+println("\n--- Numeric Literal Formats ---")
+
+-- Hexadecimal (0x prefix)
+println("0xFF:", 0xFF)
+println("0xCAFE:", 0xCAFE)
+
+-- Binary (0b prefix)
+println("0b1010:", 0b1010)
+println("0b11111111:", 0b11111111)
+
+-- Octal (0o prefix)
+println("0o777:", 0o777)
+println("0o644:", 0o644)
+
+-- Scientific notation (e/E)
+println("2.5e10:", 2.5e10)
+println("1.0E-5:", 1.0E-5)
+println("6.022e23:", 6.022e23)

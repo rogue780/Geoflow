@@ -416,6 +416,43 @@ let ar5 = num.arange(3.0, 8.0)
 println("arange(3, 8):", ar5)
 
 -- ======================================================================
+-- 12.5. Symbolic Expression Literals ($...$)
+-- ======================================================================
+println("\n--- Symbolic Expression Literals ---")
+
+-- The $...$ syntax is a shorthand for building Expr trees.
+-- Instead of calling sym.var(), sym.add(), sym.pow() etc., just write math:
+let quad = $x^2 + 3*x + 2$
+println("$x^2 + 3*x + 2$:", quad)
+
+-- Realize works directly on the parsed literal
+let quad_val2 = quad.realize({"x": 4.0})
+println("Realized at x=4:", quad_val2)
+
+-- freeSymbols works on parsed literals
+println("Free symbols:", quad.freeSymbols())
+
+-- Function calls inside literals
+let trig_expr = $sin(x) * cos(y)$
+println("$sin(x) * cos(y)$:", trig_expr)
+
+-- Differentiate a literal expression
+let derivative = sym.diff($x^3$, "x")
+println("d/dx($x^3$) =", derivative)
+
+-- Nested functions
+let nested = $sqrt(x^2 + y^2)$
+println("$sqrt(x^2 + y^2)$:", nested)
+let dist = nested.realize({"x": 3.0, "y": 4.0})
+println("  at x=3, y=4:", dist)
+
+-- Compare: verbose API vs literal syntax
+let verbose = sym.add(sym.mul(sym.num(2), sym.pow(sym.var("x"), sym.num(2))), sym.num(1))
+let concise = $2*x^2 + 1$
+println("Verbose:", verbose)
+println("Concise:", concise)
+
+-- ======================================================================
 -- Bonus: Combining symbolic and numeric approaches
 -- ======================================================================
 println("\n--- Combining Symbolic and Numeric ---")

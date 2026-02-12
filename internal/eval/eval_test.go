@@ -1520,6 +1520,44 @@ func TestByteBuiltin(t *testing.T) {
 	}
 }
 
+func TestSymbolicLiteral(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Basic symbolic literal produces Expr
+		{`$x^2$`, "x^2"},
+		// Full quadratic
+		{`$x^2 + 3*x + 2$`, "x^2 + 3*x + 2"},
+		// Function call in literal
+		{`$sin(x) * cos(y)$`, "sin(x)*cos(y)"},
+		// Realize a symbolic literal
+		{`$x^2 + 1$.realize({"x": 3.0})`, "10.0"},
+		// freeSymbols on a symbolic literal
+		{`import std.math.symbolic as sym
+let expr = $a*x + b$
+expr.freeSymbols()`, "[a, b, x]"},
+		// diff on a symbolic literal
+		{`import std.math.symbolic as sym
+sym.diff($x^3$, "x")`, "3*x^2"},
+		// Unary negation
+		{`$-x$`, "(-x)"},
+		// Nested function
+		{`$sqrt(x^2 + y^2)$`, "sqrt(x^2 + y^2)"},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		if evaluated == nil {
+			t.Fatalf("input=%q: got nil", tt.input)
+		}
+		actual := evaluated.Inspect()
+		if actual != tt.expected {
+			t.Errorf("input=%q: expected %q, got %q", tt.input, tt.expected, actual)
+		}
+	}
+}
+
 func testBooleanObject(t *testing.T, obj object.Object, expected bool, input string) {
 	t.Helper()
 	result, ok := obj.(*object.Boolean)

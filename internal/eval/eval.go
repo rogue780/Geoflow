@@ -68,7 +68,11 @@ func Eval(node ast.Node, env *object.Environment) object.Object {
 		}
 		return geom
 	case *ast.SymbolicLiteral:
-		return &object.String{Value: node.Value}
+		expr, errMsg := object.ParseSymbolicExpr(node.Value)
+		if errMsg != "" {
+			return newError("symbolic parse error: %s", errMsg)
+		}
+		return expr
 	case *ast.Identifier:
 		return evalIdentifier(node, env)
 	case *ast.PrefixExpression:

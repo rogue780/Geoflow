@@ -64,3 +64,18 @@ println("isBlank(\"a\"):", "a".isBlank())
 -- Parsing
 println("\"42\".toInt:", "42".toInt())
 println("\"3.14\".toFloat:", "3.14".toFloat())
+
+-- ── Escape Sequences ──
+println("\n--- Escape Sequences ---")
+println("Tab:\tEnd")
+println("Newline:\nEnd")
+println("Carriage return:\rEnd")
+println("Backslash: \\")
+println("Quote: \"hello\"")
+
+-- ── Raw Strings (backtick) ──
+println("\n--- Raw Strings ---")
+let raw = `This is a raw string: \n \t \\ are literal`
+println("Raw:", raw)
+let path = `C:\Users\data\new_file.txt`
+println("Path:", path)
